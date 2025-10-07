@@ -66,6 +66,18 @@ export interface Contract {
   total_rooms: number
   base_rate: number
   currency: string
+  // Stay restrictions
+  days_of_week?: {
+    mon: boolean
+    tue: boolean
+    wed: boolean
+    thu: boolean
+    fri: boolean
+    sat: boolean
+    sun: boolean
+  }
+  min_nights?: number
+  max_nights?: number
   // Tax and fees
   tax_rate?: number // VAT/Sales tax (percentage, e.g., 0.12 = 12%)
   city_tax_per_person_per_night?: number // Mandatory city tax (fixed amount)
@@ -115,10 +127,10 @@ export interface Listing {
   // For buy-to-order: specify hotel directly
   hotel_id?: number
   hotelName?: string
+  // Preferred: link to a stock/allotment record for inventory
+  stock_id?: number
   room_group_id: string // References hotel.room_groups[].id
   roomName: string
-  occupancy_type: OccupancyType
-  board_type: BoardType
   quantity: number
   purchase_type: 'inventory' | 'buy_to_order'
   // Pricing breakdown
@@ -127,6 +139,15 @@ export interface Listing {
   commission_rate?: number // Your markup on base nights (percentage, e.g., 0.15 = 15%)
   shoulder_night_margin?: number // Your markup on shoulder nights (percentage, e.g., 0.25 = 25%)
   sold: number
+}
+
+export interface Stock {
+  id: number
+  contract_id: number
+  room_group_id: string
+  roomName: string
+  quantity: number
+  notes?: string
 }
 
 export interface Activity {
@@ -144,6 +165,7 @@ export interface Summary {
 export interface Booking {
   id: number
   listing_id: number
+  rate_id?: number // Optional for backward compatibility
   tourName: string
   contractName: string
   roomName: string
@@ -180,6 +202,7 @@ interface DataContextType {
   hotels: Hotel[]
   contracts: Contract[]
   rates: Rate[]
+  stocks: Stock[]
   listings: Listing[]
   bookings: Booking[]
   recentActivity: Activity[]
@@ -190,16 +213,19 @@ interface DataContextType {
   addHotel: (hotel: Omit<Hotel, 'id'>) => void
   updateHotel: (id: number, hotel: Partial<Hotel>) => void
   deleteHotel: (id: number) => void
-  addContract: (contract: Omit<Contract, 'id'>) => void
+  addContract: (contract: Omit<Contract, 'id' | 'hotelName'>) => void
   updateContract: (id: number, contract: Partial<Contract>) => void
   deleteContract: (id: number) => void
   addRate: (rate: Omit<Rate, 'id' | 'contractName' | 'roomName'>) => void
   updateRate: (id: number, rate: Partial<Rate>) => void
   deleteRate: (id: number) => void
+  addStock: (stock: Omit<Stock, 'id' | 'roomName'>) => void
+  updateStock: (id: number, stock: Partial<Stock>) => void
+  deleteStock: (id: number) => void
   addListing: (listing: Omit<Listing, 'id' | 'tourName' | 'contractName' | 'roomName'>) => void
   updateListing: (id: number, listing: Partial<Listing>) => void
   deleteListing: (id: number) => void
-  addBooking: (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'occupancy_type' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'purchase_order'>) => void
+  addBooking: (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'purchase_order'>) => void
   updateBooking: (id: number, booking: Partial<Booking>) => void
   cancelBooking: (id: number) => void
   recordPurchaseDetails: (bookingId: number, purchaseDetails: {
@@ -293,6 +319,9 @@ const initialData = {
       total_rooms: 100,
       base_rate: 120,
       currency: "EUR",
+      days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
+      min_nights: 1,
+      max_nights: 14,
       tax_rate: 0.10, // 10% VAT
       city_tax_per_person_per_night: 2.50, // 2.50 EUR per person per night
       resort_fee_per_night: 5.00, // 5 EUR per room per night
@@ -371,6 +400,16 @@ const initialData = {
       rate: 160,
     }
   ],
+  stocks: [
+    {
+      id: 1,
+      contract_id: 1,
+      room_group_id: 'rg-1',
+      roomName: 'Standard Double',
+      quantity: 100,
+      notes: 'Initial allotment from contract'
+    }
+  ],
   listings: [
     {
       id: 1,
@@ -380,8 +419,6 @@ const initialData = {
       contractName: "May 2025 Block",
       room_group_id: "rg-1",
       roomName: "Standard Double",
-      occupancy_type: "double" as const,
-      board_type: "bed_breakfast" as const,
       quantity: 80,
       purchase_type: "inventory" as const,
       cost_price: 130, // Net rate from contract
@@ -398,8 +435,6 @@ const initialData = {
       hotelName: "Hotel Le Champs",
       room_group_id: "rg-1",
       roomName: "Standard Double",
-      occupancy_type: "double" as const,
-      board_type: "bed_breakfast" as const,
       quantity: 20, // Soft target for buy-to-order
       purchase_type: "buy_to_order" as const,
       cost_price: 135, // Estimated cost (will vary when actually purchased)
@@ -416,8 +451,6 @@ const initialData = {
       contractName: "May 2025 Block",
       room_group_id: "rg-1",
       roomName: "Standard Double",
-      occupancy_type: "single" as const,
-      board_type: "bed_breakfast" as const,
       quantity: 20,
       purchase_type: "inventory" as const,
       cost_price: 100,
@@ -467,6 +500,7 @@ const STORAGE_KEYS = {
   hotels: 'tours-inventory-hotels',
   contracts: 'tours-inventory-contracts',
   rates: 'tours-inventory-rates',
+  stocks: 'tours-inventory-stocks',
   listings: 'tours-inventory-listings',
   bookings: 'tours-inventory-bookings',
 }
@@ -495,6 +529,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [hotels, setHotelsState] = useState<Hotel[]>(() => loadFromStorage(STORAGE_KEYS.hotels, initialData.hotels))
   const [contracts, setContractsState] = useState<Contract[]>(() => loadFromStorage(STORAGE_KEYS.contracts, initialData.contracts))
   const [rates, setRatesState] = useState<Rate[]>(() => loadFromStorage(STORAGE_KEYS.rates, initialData.rates))
+  const [stocks, setStocksState] = useState<Stock[]>(() => loadFromStorage(STORAGE_KEYS.stocks, initialData.stocks))
   const [listings, setListingsState] = useState<Listing[]>(() => loadFromStorage(STORAGE_KEYS.listings, initialData.listings))
   const [bookings, setBookingsState] = useState<Booking[]>(() => loadFromStorage(STORAGE_KEYS.bookings, initialData.bookings))
 
@@ -527,6 +562,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setRatesState(prev => {
       const next = typeof data === 'function' ? data(prev) : data
       saveToStorage(STORAGE_KEYS.rates, next)
+      return next
+    })
+  }
+
+  const setStocks = (data: Stock[] | ((prev: Stock[]) => Stock[])) => {
+    setStocksState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.stocks, next)
       return next
     })
   }
@@ -576,7 +619,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // Contract CRUD
-  const addContract = (contract: Omit<Contract, 'id'>) => {
+  const addContract = (contract: Omit<Contract, 'id' | 'hotelName'>) => {
     const hotel = hotels.find(h => h.id === contract.hotel_id)
     const newContract = { 
       ...contract, 
@@ -637,6 +680,39 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setRates(rates.filter(r => r.id !== id))
   }
 
+  // Stock CRUD
+  const addStock = (stock: Omit<Stock, 'id' | 'roomName'>) => {
+    const contract = contracts.find(c => c.id === stock.contract_id)
+    const hotel = hotels.find(h => h.id === contract?.hotel_id)
+    const roomGroup = hotel?.room_groups.find(rg => rg.id === stock.room_group_id)
+    const newStock: Stock = {
+      ...stock,
+      id: Math.max(...stocks.map(s => s.id), 0) + 1,
+      roomName: roomGroup?.room_type || ''
+    }
+    setStocks([...stocks, newStock])
+  }
+
+  const updateStock = (id: number, stock: Partial<Stock>) => {
+    setStocks(stocks.map(s => {
+      if (s.id === id) {
+        const sourceContract = contracts.find(c => c.id === (stock.contract_id || s.contract_id))
+        const hotel = hotels.find(h => h.id === sourceContract?.hotel_id)
+        const roomGroup = hotel?.room_groups.find(rg => rg.id === (stock.room_group_id || s.room_group_id))
+        return {
+          ...s,
+          ...stock,
+          roomName: roomGroup?.room_type || s.roomName,
+        }
+      }
+      return s
+    }))
+  }
+
+  const deleteStock = (id: number) => {
+    setStocks(stocks.filter(s => s.id !== id))
+  }
+
   // Listing CRUD
   const addListing = (listing: Omit<Listing, 'id' | 'tourName' | 'contractName' | 'hotelName' | 'roomName'>) => {
     const tour = tours.find(t => t.id === listing.tour_id)
@@ -645,15 +721,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // For buy-to-order: get info from hotel directly
     let hotel: Hotel | undefined
     let contract: Contract | undefined
+    let stockRecord: Stock | undefined
     
-    if (listing.purchase_type === 'inventory' && listing.contract_id) {
-      contract = contracts.find(c => c.id === listing.contract_id)
+    if (listing.purchase_type === 'inventory') {
+      if (listing.stock_id) {
+        stockRecord = stocks.find(s => s.id === listing.stock_id)
+        const contractIdFromStock = stockRecord ? stockRecord.contract_id : undefined
+        if (contractIdFromStock !== undefined) {
+          contract = contracts.find(c => c.id === contractIdFromStock)
+        }
+      } else if (listing.contract_id) {
+        contract = contracts.find(c => c.id === listing.contract_id)
+      }
       hotel = hotels.find(h => h.id === contract?.hotel_id)
     } else if (listing.purchase_type === 'buy_to_order' && listing.hotel_id) {
       hotel = hotels.find(h => h.id === listing.hotel_id)
     }
     
-    const roomGroup = hotel?.room_groups.find(rg => rg.id === listing.room_group_id)
+    const targetRoomGroupId = stockRecord && stockRecord.room_group_id ? stockRecord.room_group_id : listing.room_group_id
+    const roomGroup = hotel?.room_groups.find(rg => rg.id === targetRoomGroupId)
     
     const newListing = { 
       ...listing, 
@@ -691,7 +777,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // Booking CRUD
-  const addBooking = (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'occupancy_type' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'hotel_confirmation'>) => {
+  const addBooking = (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'hotel_confirmation'>) => {
     const listing = listings.find(l => l.id === booking.listing_id)
     if (!listing) {
       alert('Listing not found')
@@ -699,25 +785,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
 
     // Check availability (strict for inventory, flexible for buy-to-order)
-    const available = listing.quantity - listing.sold
+    let available = 0
     
-    if (listing.purchase_type === 'inventory') {
+    if (listing.purchase_type === 'inventory' && listing.stock_id) {
+      // For inventory listings, check stock availability
+      const stock = stocks.find(s => s.id === listing.stock_id)
+      if (stock) {
+        const sold = bookings
+          .filter(b => b.listing_id === listing.id && b.status !== 'cancelled')
+          .reduce((sum, b) => sum + b.quantity, 0)
+        available = stock.quantity - sold
+      }
+      
       // Inventory: Hard limit
       if (booking.quantity > available) {
         alert(`Only ${available} rooms available in inventory!`)
         return
       }
     } else {
-      // Buy-to-order: Soft warning if exceeding target
-      if (booking.quantity > available && available > 0) {
-        // Target exceeded but allow it (flexible capacity)
-        console.log(`INFO: Buy-to-order booking exceeds target allocation:
-        Target: ${listing.quantity}
-        Already sold: ${listing.sold}
-        This booking: ${booking.quantity}
-        New total: ${listing.sold + booking.quantity}
-        Overage: ${(listing.sold + booking.quantity) - listing.quantity}`)
-      }
+      // Buy-to-order: Always allow (flexible capacity)
+      available = 999 // Large number to indicate flexible capacity
     }
 
     // Determine purchase status based on listing type
@@ -736,7 +823,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       CUSTOMER: ${booking.customer_name}
       TOUR: ${listing.tourName || 'N/A'}
       HOTEL: ${listing.hotelName || 'N/A'}
-      ROOM: ${listing.roomName} (${listing.occupancy_type})
+      ROOM: ${listing.roomName}
       QUANTITY: ${booking.quantity} rooms
       SELLING PRICE: ${booking.total_price} (total to customer)
       
@@ -754,9 +841,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
       ...booking,
       id: Math.max(...bookings.map(b => b.id), 0) + 1,
       tourName: listing.tourName,
-      contractName: listing.contractName,
+      contractName: listing.contractName || '',
       roomName: listing.roomName,
-      occupancy_type: listing.occupancy_type,
+      // occupancy_type is chosen from the rate at booking time; keep undefined here
       purchase_type: listing.purchase_type,
       booking_date: new Date().toISOString().split('T')[0],
       status: bookingStatus,
@@ -765,12 +852,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     
     setBookings([...bookings, newBooking])
     
-    // Update listing sold count
-    setListings(listings.map(l => 
-      l.id === booking.listing_id 
-        ? { ...l, sold: l.sold + booking.quantity }
-        : l
-    ))
+    // Note: Sold quantities are now tracked via bookings, not listings
 
     // Show appropriate message
     if (listing.purchase_type === 'buy_to_order') {
@@ -857,12 +939,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const value = {
+  const value: DataContextType = {
     summary: initialData.summary,
     tours,
     hotels,
     contracts,
     rates,
+    stocks,
     listings,
     bookings,
     recentActivity: initialData.recentActivity,
@@ -879,6 +962,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addRate,
     updateRate,
     deleteRate,
+    addStock,
+    updateStock,
+    deleteStock,
     addListing,
     updateListing,
     deleteListing,

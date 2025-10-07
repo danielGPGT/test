@@ -21,7 +21,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useData, Contract, BoardType, BoardOption, AttritionStage, CancellationStage, PaymentSchedule } from '@/contexts/data-context'
-import { Plus, Trash2, AlertTriangle, Ban, DollarSign as DollarIcon, Building2, Receipt, Coffee, Calendar as CalendarIcon } from 'lucide-react'
+import { Plus, Trash2, AlertTriangle, Ban, DollarSign as DollarIcon, Receipt, Coffee, Calendar as CalendarIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { BOARD_TYPE_LABELS } from '@/lib/pricing'
 import { Badge } from '@/components/ui/badge'
@@ -46,6 +46,9 @@ export function Contracts() {
     total_rooms: 0,
     base_rate: 0,
     currency: 'EUR',
+    days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
+    min_nights: 1,
+    max_nights: 14,
     tax_rate: 0,
     city_tax_per_person_per_night: 0,
     resort_fee_per_night: 0,
@@ -90,6 +93,8 @@ export function Contracts() {
     { header: 'Total Rooms', accessor: 'total_rooms' },
     { header: 'Base Rate', accessor: 'base_rate', format: 'currency' as const },
     { header: 'Currency', accessor: 'currency' },
+    { header: 'Min Nights', accessor: 'min_nights' },
+    { header: 'Max Nights', accessor: 'max_nights' },
     { header: 'Actions', accessor: 'actions', type: 'actions' as const, actions: ['view', 'edit', 'delete'] },
   ]
 
@@ -119,6 +124,9 @@ export function Contracts() {
       total_rooms: 0,
       base_rate: 0,
       currency: 'EUR',
+      days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
+      min_nights: 1,
+      max_nights: 14,
       tax_rate: 0,
       city_tax_per_person_per_night: 0,
       resort_fee_per_night: 0,
@@ -155,6 +163,9 @@ export function Contracts() {
       total_rooms: contract.total_rooms,
       base_rate: contract.base_rate,
       currency: contract.currency,
+      days_of_week: contract.days_of_week || { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
+      min_nights: contract.min_nights ?? 1,
+      max_nights: contract.max_nights ?? 14,
       tax_rate: contract.tax_rate || 0,
       city_tax_per_person_per_night: contract.city_tax_per_person_per_night || 0,
       resort_fee_per_night: contract.resort_fee_per_night || 0,
@@ -184,6 +195,9 @@ export function Contracts() {
         total_rooms: 0,
         base_rate: 0,
         currency: 'EUR',
+        days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
+        min_nights: 1,
+        max_nights: 14,
         tax_rate: 0,
         city_tax_per_person_per_night: 0,
         resort_fee_per_night: 0,
@@ -898,6 +912,54 @@ export function Contracts() {
               </Accordion>
 
               <div className="grid gap-2">
+                <Label>Days of Week (MTWTFSS)</Label>
+                <div className="flex flex-wrap gap-3">
+                  {([
+                    ['mon','M'],
+                    ['tue','T'],
+                    ['wed','W'],
+                    ['thu','T'],
+                    ['fri','F'],
+                    ['sat','S'],
+                    ['sun','S'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2 text-sm">
+                      <Checkbox
+                        checked={formData.days_of_week[key]}
+                        onCheckedChange={(checked: boolean | "indeterminate") => setFormData({
+                          ...formData,
+                          days_of_week: { ...formData.days_of_week, [key]: Boolean(checked) }
+                        })}
+                      />
+                      <span>{label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <Label htmlFor="min_nights">Min Nights</Label>
+                  <Input
+                    id="min_nights"
+                    type="number"
+                    min={1}
+                    value={formData.min_nights}
+                    onChange={(e) => setFormData({ ...formData, min_nights: parseInt(e.target.value) || 0 })}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor="max_nights">Max Nights</Label>
+                  <Input
+                    id="max_nights"
+                    type="number"
+                    min={1}
+                    value={formData.max_nights}
+                    onChange={(e) => setFormData({ ...formData, max_nights: parseInt(e.target.value) || 0 })}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-2">
                 <Label htmlFor="notes">Notes</Label>
                 <Textarea
                   id="notes"
@@ -1051,6 +1113,53 @@ export function Contracts() {
                 value={formData.supplier_commission_rate}
                 onChange={(e) => setFormData({ ...formData, supplier_commission_rate: parseFloat(e.target.value) })}
               />
+            </div>
+            <div className="grid gap-2">
+              <Label>Days of Week (MTWTFSS)</Label>
+              <div className="flex flex-wrap gap-3">
+                {([
+                  ['mon','M'],
+                  ['tue','T'],
+                  ['wed','W'],
+                  ['thu','T'],
+                  ['fri','F'],
+                  ['sat','S'],
+                  ['sun','S'],
+                ] as const).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={formData.days_of_week[key]}
+                      onCheckedChange={(checked: boolean | "indeterminate") => setFormData({
+                        ...formData,
+                        days_of_week: { ...formData.days_of_week, [key]: Boolean(checked) }
+                      })}
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="grid gap-2">
+                <Label htmlFor="edit-min_nights">Min Nights</Label>
+                <Input
+                  id="edit-min_nights"
+                  type="number"
+                  min={1}
+                  value={formData.min_nights}
+                  onChange={(e) => setFormData({ ...formData, min_nights: parseInt(e.target.value) || 0 })}
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label htmlFor="edit-max_nights">Max Nights</Label>
+                <Input
+                  id="edit-max_nights"
+                  type="number"
+                  min={1}
+                  value={formData.max_nights}
+                  onChange={(e) => setFormData({ ...formData, max_nights: parseInt(e.target.value) || 0 })}
+                />
+              </div>
             </div>
             
             {/* Board/Meal Plan Options */}

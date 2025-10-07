@@ -10,7 +10,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -20,9 +19,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useData, Listing, OccupancyType, BoardType } from '@/contexts/data-context'
-import { Plus, Info, AlertCircle, Ticket, BedDouble, DollarSign, Package } from 'lucide-react'
-import { BOARD_TYPE_LABELS, calculateSellingPrice, calculatePriceBreakdown } from '@/lib/pricing'
+import { useData, Listing } from '@/contexts/data-context'
+import { Plus, Info, AlertCircle, Ticket, BedDouble } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -32,7 +30,7 @@ import {
 import { toast } from 'sonner'
 
 export function Listings() {
-  const { listings, tours, contracts, hotels, rates, addListing, updateListing, deleteListing } = useData()
+  const { listings, tours, contracts, hotels, stocks, addListing, updateListing, deleteListing } = useData()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editingListing, setEditingListing] = useState<Listing | null>(null)
@@ -41,14 +39,14 @@ export function Listings() {
     contract_id: 0,
     hotel_id: 0,
     room_group_id: '',
-    occupancy_type: 'double' as OccupancyType,
-    board_type: 'bed_breakfast' as BoardType,
-    quantity: 0,
+    stock_id: 0,
     purchase_type: 'inventory' as 'inventory' | 'buy_to_order',
+    // Legacy fields kept for type compatibility but not used in UI
+    quantity: 0,
     cost_price: 0,
     selling_price: 0,
     commission_rate: 0.20,
-    shoulder_night_margin: 0.25, // Default 25% for shoulder nights
+    shoulder_night_margin: 0.25,
     sold: 0,
   })
 
@@ -131,23 +129,7 @@ export function Listings() {
     [hotels, formData.hotel_id, formData.purchase_type]
   )
   
-  // Calculate rooms already allocated from this contract
-  const contractRoomsAllocated = useMemo(() => {
-    if (!selectedContract) return 0
-    
-    return listings
-      .filter(l => 
-        l.contract_id === selectedContract.id && 
-        l.id !== editingListing?.id // Exclude current listing when editing
-      )
-      .reduce((sum, l) => sum + l.quantity, 0)
-  }, [selectedContract, listings, editingListing])
-  
-  // Calculate remaining rooms available in contract
-  const contractRoomsRemaining = useMemo(() => {
-    if (!selectedContract) return 0
-    return selectedContract.total_rooms - contractRoomsAllocated
-  }, [selectedContract, contractRoomsAllocated])
+  // Note: Room allocation now handled by Stock, not Listings
 
   // Get room groups from selected source (contract's hotel or direct hotel)
   const availableRoomGroups = useMemo(() => {
@@ -160,88 +142,29 @@ export function Listings() {
     return []
   }, [formData.purchase_type, selectedContract, selectedHotel, hotels])
 
-  // Get available rates for selected room group and contract
-  const availableRates = useMemo(() => {
+  // Get available stocks for selected contract and room type
+  const availableStocks = useMemo(() => {
     if (!formData.contract_id || !formData.room_group_id) return []
-    return rates.filter(r => 
-      r.contract_id === formData.contract_id && 
-      r.room_group_id === formData.room_group_id
-    )
-  }, [formData.contract_id, formData.room_group_id, rates])
+    return stocks.filter(s => s.contract_id === formData.contract_id && s.room_group_id === formData.room_group_id)
+  }, [formData.contract_id, formData.room_group_id, stocks])
 
-  // Auto-populate cost price from rate when occupancy and board type selected
-  useEffect(() => {
-    if (formData.occupancy_type && formData.board_type && availableRates.length > 0 && selectedContract) {
-      const matchingRate = availableRates.find(r => 
-        r.occupancy_type === formData.occupancy_type &&
-        r.board_type === formData.board_type
-      )
-      if (matchingRate && formData.cost_price === 0) {
-        // Calculate full cost including taxes, fees, and commissions
-        const breakdown = calculatePriceBreakdown(
-          matchingRate.rate,
-          selectedContract,
-          formData.occupancy_type,
-          1 // per night
-        )
-        const costPrice = breakdown.totalCost
-        const sellingPrice = calculateSellingPrice(costPrice, formData.commission_rate)
-        setFormData(prev => ({ 
-          ...prev, 
-          cost_price: costPrice,
-          selling_price: sellingPrice
-        }))
-      }
-    }
-  }, [formData.occupancy_type, formData.board_type, availableRates, formData.cost_price, formData.commission_rate, selectedContract])
-
-  // Auto-update selling price when cost or commission changes
-  useEffect(() => {
-    if (formData.cost_price > 0 && formData.commission_rate >= 0) {
-      const newSellingPrice = calculateSellingPrice(formData.cost_price, formData.commission_rate)
-      if (Math.abs(newSellingPrice - formData.selling_price) > 0.01) {
-        setFormData(prev => ({ ...prev, selling_price: newSellingPrice }))
-      }
-    }
-  }, [formData.cost_price, formData.commission_rate, formData.selling_price])
+  // Note: Pricing handled by Rates, not Listings
 
   const columns = [
     { header: 'ID', accessor: 'id', width: 60 },
     { header: 'Tour', accessor: 'tourName' },
-    { header: 'Source', accessor: 'sourceDisplay' }, // Contract or Hotel
+    { header: 'Source', accessor: 'sourceDisplay' },
     { header: 'Room', accessor: 'roomName' },
-    { header: 'Occ', accessor: 'occupancy_type', format: 'badge' as const },
-    { header: 'Board', accessor: 'board_type', format: 'badge' as const },
-    { header: 'Target', accessor: 'quantity' },
     { header: 'Type', accessor: 'purchase_type', format: 'badge' as const },
-    { header: 'Cost', accessor: 'cost_price', format: 'currency' as const },
-    { header: 'Sell', accessor: 'selling_price', format: 'currency' as const },
-    { header: 'Margin', accessor: 'profit' },
-    { header: 'Sold', accessor: 'sold' },
-    { header: 'Avail', accessor: 'availableDisplay' },
     { header: 'Actions', accessor: 'actions', type: 'actions' as const, actions: ['view', 'edit', 'delete'] },
   ]
 
   // Add calculated fields to listings
   const listingsWithCalculations = useMemo(() => 
-    listings.map(listing => {
-      const available = listing.quantity - listing.sold
-      const profit = listing.selling_price - listing.cost_price
-      const profitDisplay = `${profit.toFixed(2)} (${((profit / listing.selling_price) * 100).toFixed(0)}%)`
-      const sourceDisplay = listing.purchase_type === 'inventory' 
-        ? (listing.contractName || 'Contract')
-        : (listing.hotelName || 'Hotel')
-      
-      return {
-        ...listing,
-        available: available,
-        availableDisplay: listing.purchase_type === 'buy_to_order' 
-          ? `${available} (flex)` 
-          : available.toString(),
-        profit: profitDisplay,
-        sourceDisplay: sourceDisplay
-      }
-    }),
+    listings.map(listing => ({
+      ...listing,
+      sourceDisplay: listing.purchase_type === 'inventory' ? (listing.contractName || 'Contract') : (listing.hotelName || 'Hotel')
+    })),
     [listings]
   )
 
@@ -263,24 +186,7 @@ export function Listings() {
       toast.error('Please select a room type')
       return
     }
-    if (formData.quantity <= 0) {
-      toast.error('Please enter a quantity')
-      return
-    }
-    
-    // Check if quantity exceeds contract remaining rooms for inventory
-    if (formData.purchase_type === 'inventory' && selectedContract) {
-      if (formData.quantity > contractRoomsRemaining) {
-        toast.error(`Only ${contractRoomsRemaining} rooms remaining in this contract (${contractRoomsAllocated} already allocated of ${selectedContract.total_rooms} total)`)
-        return
-      }
-    }
-    
-    if (formData.selling_price <= 0) {
-      toast.error('Please enter a selling price')
-      return
-    }
-    
+    // Note: quantity/cost/price handled via Stock and Rates; listing is product wrapper
     addListing(formData)
     toast.success('Listing created successfully')
     setIsCreateOpen(false)
@@ -293,14 +199,13 @@ export function Listings() {
       contract_id: 0,
       hotel_id: 0,
       room_group_id: '',
-      occupancy_type: 'double',
-      board_type: 'bed_breakfast',
-      quantity: 0,
+      stock_id: 0,
       purchase_type: 'inventory',
       cost_price: 0,
       selling_price: 0,
       commission_rate: 0.20,
       shoulder_night_margin: 0.25,
+      quantity: 0,
       sold: 0,
     })
   }
@@ -312,14 +217,13 @@ export function Listings() {
       contract_id: listing.contract_id || 0,
       hotel_id: listing.hotel_id || 0,
       room_group_id: listing.room_group_id,
-      occupancy_type: listing.occupancy_type,
-      board_type: listing.board_type,
-      quantity: listing.quantity,
+      stock_id: listing.stock_id || 0,
       purchase_type: listing.purchase_type,
       cost_price: listing.cost_price,
       selling_price: listing.selling_price,
       commission_rate: listing.commission_rate || 0.20,
       shoulder_night_margin: listing.shoulder_night_margin || 0.25,
+      quantity: listing.quantity,
       sold: listing.sold,
     })
     setIsEditOpen(true)
@@ -345,24 +249,7 @@ export function Listings() {
       toast.error('Please select a room type')
       return
     }
-    if (formData.quantity <= 0) {
-      toast.error('Please enter a quantity')
-      return
-    }
-    
-    // Check if quantity exceeds contract remaining rooms for inventory
-    if (formData.purchase_type === 'inventory' && selectedContract) {
-      if (formData.quantity > contractRoomsRemaining) {
-        toast.error(`Only ${contractRoomsRemaining} rooms remaining in this contract (${contractRoomsAllocated} already allocated of ${selectedContract.total_rooms} total)`)
-        return
-      }
-    }
-    
-    if (formData.selling_price <= 0) {
-      toast.error('Please enter a selling price')
-      return
-    }
-    
+    // No quantity/cost/price edits here
     updateListing(editingListing.id, formData)
     toast.success('Listing updated successfully')
     setIsEditOpen(false)
@@ -473,7 +360,7 @@ export function Listings() {
             )}
 
             <div className="grid gap-4 py-4">
-              <Accordion type="multiple" defaultValue={["tour-source", "room-details", "pricing", "inventory"]} className="w-full">
+              <Accordion type="multiple" defaultValue={["tour-source", "room-details"]} className="w-full">
                 {/* Tour & Source Section */}
                 <AccordionItem value="tour-source">
                   <AccordionTrigger className="text-sm font-semibold hover:no-underline">
@@ -619,296 +506,36 @@ export function Listings() {
                 </Select>
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="occupancy_type">Occupancy *</Label>
-                  <Select
-                    value={formData.occupancy_type}
-                    onValueChange={(value: OccupancyType) => setFormData({ ...formData, occupancy_type: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="single">Single</SelectItem>
-                      <SelectItem value="double">Double</SelectItem>
-                      <SelectItem value="triple">Triple</SelectItem>
-                      <SelectItem value="quad">Quad</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid gap-2">
-                  <Label htmlFor="board_type">Board/Meals *</Label>
-                  <Select
-                    value={formData.board_type}
-                    onValueChange={(value: BoardType) => setFormData({ ...formData, board_type: value })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="room_only">Room Only</SelectItem>
-                      <SelectItem value="bed_breakfast">B&B</SelectItem>
-                      <SelectItem value="half_board">Half Board</SelectItem>
-                      <SelectItem value="full_board">Full Board</SelectItem>
-                      <SelectItem value="all_inclusive">All-Inclusive</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {availableRates.length > 0 
-                          ? 'Pricing will auto-populate from matching rate'
-                          : 'Create rates for this room and contract first'}
-                      </p>
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-
-                {/* Inventory Settings Section */}
-                <AccordionItem value="inventory">
-                  <AccordionTrigger className="text-sm font-semibold hover:no-underline">
-                    <div className="flex items-center gap-2">
-                      <Package className="h-4 w-4" />
-                      Inventory Settings
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="space-y-4 pt-2">
                       <div className="grid gap-2">
-                        <Label htmlFor="quantity">
-                          {formData.purchase_type === 'inventory' ? 'Quantity *' : 'Target Quantity *'}
-                        </Label>
-                        <Input
-                          id="quantity"
-                          type="number"
-                          value={formData.quantity}
-                          onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 0 })}
-                          max={formData.purchase_type === 'inventory' && selectedContract ? contractRoomsRemaining : undefined}
-                        />
-                        {formData.purchase_type === 'inventory' && selectedContract && (
-                          <div className="space-y-1">
-                            <p className="text-xs text-blue-600 dark:text-blue-400 flex items-center gap-1">
-                              <Info className="h-3 w-3" />
-                              Contract: {selectedContract.total_rooms} total | {contractRoomsAllocated} allocated | {contractRoomsRemaining} remaining
-                            </p>
-                            {contractRoomsRemaining === 0 && (
-                              <p className="text-xs text-orange-600 dark:text-orange-400 flex items-center gap-1">
-                                <AlertCircle className="h-3 w-3" />
-                                No rooms remaining in this contract
-                              </p>
-                            )}
-                          </div>
-                        )}
-                        <p className="text-xs text-muted-foreground">
-                          {formData.purchase_type === 'inventory' 
-                            ? 'Exact number of pre-purchased rooms (hard limit)'
-                            : 'Target allocation - can sell more as buy-to-order is flexible'}
-                        </p>
-                      </div>
-
-                      <div className="grid gap-2">
-                        <Label htmlFor="purchase_type">Purchase Type *</Label>
+                        <Label htmlFor="stock_id">Stock (optional for inventory)</Label>
                         <Select
-                          value={formData.purchase_type}
-                          onValueChange={(value: 'inventory' | 'buy_to_order') => setFormData({ ...formData, purchase_type: value })}
+                          value={String(formData.stock_id || '')}
+                          onValueChange={(value) => setFormData({ ...formData, stock_id: parseInt(value) || 0 })}
+                          disabled={formData.purchase_type !== 'inventory'}
                         >
                           <SelectTrigger>
-                            <SelectValue />
+                            <SelectValue placeholder="Select an allotment (if any)" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="inventory">
-                              <div>
-                                <p className="font-medium">Inventory</p>
-                                <p className="text-xs text-muted-foreground">Pre-purchased - exact quantity limit</p>
-                              </div>
-                            </SelectItem>
-                            <SelectItem value="buy_to_order">
-                              <div>
-                                <p className="font-medium">Buy to Order</p>
-                                <p className="text-xs text-muted-foreground">Purchase when sold - flexible capacity</p>
-                              </div>
-                            </SelectItem>
+                            {availableStocks.map((s) => (
+                              <SelectItem key={s.id} value={s.id.toString()}>
+                                {s.roomName} • Qty {s.quantity}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
-                        <p className="text-xs text-muted-foreground flex items-center gap-1">
-                          {formData.purchase_type === 'inventory' 
-                            ? (
-                              <>
-                                <AlertCircle className="h-3 w-3 text-orange-500" />
-                                Inventory has strict quantity limits
-                              </>
-                            )
-                            : (
-                              <>
-                                <Info className="h-3 w-3 text-blue-500" />
-                                Buy-to-order allows selling beyond target quantity
-                              </>
-                            )}
+                        <p className="text-xs text-muted-foreground">
+                          Pricing and occupancy/board will be chosen during booking via rate plans.
                         </p>
                       </div>
                     </div>
                   </AccordionContent>
                 </AccordionItem>
 
-                {/* Pricing & Commission Section */}
-                <AccordionItem value="pricing">
-                  <AccordionTrigger className="text-sm font-semibold hover:no-underline">
-                    <div className="flex items-center gap-2">
-                      <DollarSign className="h-4 w-4" />
-                      Pricing & Commission
-                    </div>
-                  </AccordionTrigger>
-                  <AccordionContent>
-                    <div className="space-y-4 pt-2">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="grid gap-2">
-                          <Label htmlFor="commission_rate">Base Nights Markup (%)</Label>
-                          <Input
-                            id="commission_rate"
-                            type="number"
-                            step="0.01"
-                            value={formData.commission_rate * 100}
-                            onChange={(e) => setFormData({ ...formData, commission_rate: (parseFloat(e.target.value) || 0) / 100 })}
-                            placeholder="e.g., 20 for 20%"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Markup on contract period nights
-                          </p>
-                        </div>
-                        
-                        <div className="grid gap-2">
-                          <Label htmlFor="shoulder_margin">Shoulder Nights Markup (%)</Label>
-                          <Input
-                            id="shoulder_margin"
-                            type="number"
-                            step="0.01"
-                            value={formData.shoulder_night_margin * 100}
-                            onChange={(e) => setFormData({ ...formData, shoulder_night_margin: (parseFloat(e.target.value) || 0) / 100 })}
-                            placeholder="e.g., 25 for 25%"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            Markup on pre/post shoulder nights
-                          </p>
-                        </div>
-                      </div>
-                      
-                      {/* Shoulder Night Pricing Info */}
-                      {selectedContract && (selectedContract.pre_shoulder_rates?.length || 0) + (selectedContract.post_shoulder_rates?.length || 0) > 0 && (
-                        <Card className="bg-purple-50 dark:bg-purple-950/30 border-purple-200 dark:border-purple-800">
-                          <CardContent className="pt-3 pb-3">
-                            <div className="flex items-start gap-2">
-                              <Info className="h-4 w-4 text-purple-600 mt-0.5" />
-                              <div className="text-xs space-y-1">
-                                <p className="font-medium text-purple-900 dark:text-purple-100">
-                                  Shoulder Night Pricing Available
-                                </p>
-                                <div className="text-purple-700 dark:text-purple-200">
-                                  {selectedContract.pre_shoulder_rates && selectedContract.pre_shoulder_rates.length > 0 && (
-                                    <p>• Pre-shoulder: {selectedContract.pre_shoulder_rates.length} nights before contract</p>
-                                  )}
-                                  {selectedContract.post_shoulder_rates && selectedContract.post_shoulder_rates.length > 0 && (
-                                    <p>• Post-shoulder: {selectedContract.post_shoulder_rates.length} nights after contract</p>
-                                  )}
-                                  <p className="mt-1">
-                                    Base nights: {(formData.commission_rate * 100).toFixed(0)}% markup | 
-                                    Shoulder nights: {(formData.shoulder_night_margin * 100).toFixed(0)}% markup
-                                  </p>
-                                </div>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="grid gap-2">
-                          <Label htmlFor="cost_price">
-                            {formData.purchase_type === 'inventory' ? 'Cost Price' : 'Estimated Cost'} (EUR)
-                          </Label>
-                          <Input
-                            id="cost_price"
-                            type="number"
-                            step="0.01"
-                            value={formData.cost_price}
-                            onChange={(e) => setFormData({ ...formData, cost_price: parseFloat(e.target.value) || 0 })}
-                            placeholder={formData.purchase_type === 'inventory' ? "Auto-fills from rate" : "Enter estimated cost"}
-                          />
-                          <p className="text-xs text-muted-foreground flex items-center gap-1">
-                            {formData.purchase_type === 'inventory' 
-                              ? 'Actual cost from contract rate'
-                              : (
-                                <>
-                                  <AlertCircle className="h-3 w-3 text-orange-500" />
-                                  Estimated - actual cost entered when purchased
-                                </>
-                              )}
-                          </p>
-                        </div>
-
-                        <div className="grid gap-2">
-                          <Label htmlFor="selling_price">Selling Price (EUR) *</Label>
-                          <Input
-                            id="selling_price"
-                            type="number"
-                            step="0.01"
-                            value={formData.selling_price}
-                            onChange={(e) => setFormData({ ...formData, selling_price: parseFloat(e.target.value) || 0 })}
-                            placeholder="Auto-calculated"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            What customer pays
-                          </p>
-                        </div>
-                      </div>
-
-                      {formData.cost_price > 0 && formData.selling_price > 0 && (
-                        <Card className="bg-muted/50">
-                          <CardContent className="pt-4">
-                            <div className="text-sm space-y-1">
-                              <div className="flex justify-between">
-                                <span>{formData.purchase_type === 'inventory' ? 'Cost Price:' : 'Estimated Cost:'}  </span>
-                                <span className="font-medium">{formData.cost_price.toFixed(2)} EUR</span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>Selling Price:</span>
-                                <span className="font-medium">{formData.selling_price.toFixed(2)} EUR</span>
-                              </div>
-                              <div className="border-t pt-1 flex justify-between">
-                                <span className="font-medium">{formData.purchase_type === 'inventory' ? 'Profit:' : 'Expected Profit:'}  </span>
-                                <span className={`font-bold ${formData.selling_price > formData.cost_price ? 'text-green-600' : 'text-red-600'}`}>
-                                  {(formData.selling_price - formData.cost_price).toFixed(2)} EUR
-                                </span>
-                              </div>
-                              <div className="flex justify-between text-xs text-muted-foreground">
-                                <span>Profit Margin:</span>
-                                <span>{(((formData.selling_price - formData.cost_price) / formData.selling_price) * 100).toFixed(1)}%</span>
-                              </div>
-                              {formData.purchase_type === 'buy_to_order' && (
-                                <p className="text-xs text-orange-600 dark:text-orange-400 pt-1 flex items-center gap-1">
-                                  <AlertCircle className="h-3 w-3" />
-                                  Estimated - actual profit calculated when purchased
-                                </p>
-                              )}
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
+                
               </Accordion>
 
-              <div className="grid gap-2 mt-4">
-                <Label htmlFor="sold">Already Sold</Label>
-                <Input
-                  id="sold"
-                  type="number"
-                  value={formData.sold}
-                  onChange={(e) => setFormData({ ...formData, sold: parseInt(e.target.value) || 0 })}
-                />
-              </div>
+              {/* Note: Sold quantities tracked via Stock and Bookings, not Listings */}
             </div>
 
             <DialogFooter>
@@ -922,8 +549,7 @@ export function Listings() {
                 onClick={handleCreate} 
                 disabled={
                   !formData.tour_id || 
-                  !formData.room_group_id || 
-                  formData.quantity === 0 ||
+                  !formData.room_group_id ||
                   (formData.purchase_type === 'inventory' ? !formData.contract_id : !formData.hotel_id)
                 }
               >
@@ -1035,33 +661,7 @@ export function Listings() {
               </Select>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-occupancy_type">Occupancy Type *</Label>
-              <Select
-                value={formData.occupancy_type}
-                onValueChange={(value: OccupancyType) => setFormData({ ...formData, occupancy_type: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="single">Single</SelectItem>
-                  <SelectItem value="double">Double</SelectItem>
-                  <SelectItem value="triple">Triple</SelectItem>
-                  <SelectItem value="quad">Quad</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="edit-quantity">Quantity *</Label>
-              <Input
-                id="edit-quantity"
-                type="number"
-                value={formData.quantity}
-                onChange={(e) => setFormData({ ...formData, quantity: parseInt(e.target.value) || 0 })}
-              />
-            </div>
+            {/* Note: Occupancy, quantity, pricing handled by Rates and Stock */}
 
             <div className="grid gap-2">
               <Label htmlFor="edit-purchase_type">Purchase Type *</Label>
@@ -1079,26 +679,6 @@ export function Listings() {
               </Select>
             </div>
 
-            <div className="grid gap-2">
-              <Label htmlFor="edit-price">Price</Label>
-              <Input
-                id="edit-price"
-                type="number"
-                step="0.01"
-                value={formData.price}
-                onChange={(e) => setFormData({ ...formData, price: parseFloat(e.target.value) || 0 })}
-              />
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="edit-sold">Sold</Label>
-              <Input
-                id="edit-sold"
-                type="number"
-                value={formData.sold}
-                onChange={(e) => setFormData({ ...formData, sold: parseInt(e.target.value) || 0 })}
-              />
-            </div>
           </div>
 
           <DialogFooter>
@@ -1115,3 +695,6 @@ export function Listings() {
     </div>
   )
 }
+
+
+

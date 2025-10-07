@@ -32,9 +32,8 @@ import {
   MapPin,
   Calendar,
   Bed,
-  Users
 } from 'lucide-react'
-import { useData, Hotel, Contract, Rate, OccupancyType, BoardType } from '@/contexts/data-context'
+import { useData } from '@/contexts/data-context'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
 import { BOARD_TYPE_LABELS } from '@/lib/pricing'
@@ -47,32 +46,17 @@ import {
 import { toast } from 'sonner'
 
 export function InventorySetup() {
-  const { 
-    hotels, 
-    contracts, 
-    rates,
-    addHotel,
-    updateHotel,
-    deleteHotel,
-    addContract,
-    updateContract,
-    deleteContract,
-    addRate,
-    updateRate,
-    deleteRate
-  } = useData()
+  const { hotels, contracts, rates, stocks, deleteRate, addStock, updateStock, deleteStock } = useData()
   
   const [selectedHotelId, setSelectedHotelId] = useState<number | null>(null)
   const [selectedContractId, setSelectedContractId] = useState<number | null>(null)
   
   // Dialog states
-  const [isHotelDialogOpen, setIsHotelDialogOpen] = useState(false)
-  const [isContractDialogOpen, setIsContractDialogOpen] = useState(false)
-  const [isRateDialogOpen, setIsRateDialogOpen] = useState(false)
-  
-  const [editingHotel, setEditingHotel] = useState<Hotel | null>(null)
-  const [editingContract, setEditingContract] = useState<Contract | null>(null)
-  const [editingRate, setEditingRate] = useState<Rate | null>(null)
+  // (Dialogs and edit states for Hotels/Contracts/Rates are managed on dedicated pages)
+  // Stock create state
+  const [stockRoomGroupId, setStockRoomGroupId] = useState<string>('')
+  const [stockQuantity, setStockQuantity] = useState<string>('')
+  const [stockNotes, setStockNotes] = useState<string>('')
 
   // Get selected entities
   const selectedHotel = useMemo(() => 
@@ -93,6 +77,11 @@ export function InventorySetup() {
   const contractRates = useMemo(() =>
     selectedContractId ? rates.filter(r => r.contract_id === selectedContractId) : [],
     [rates, selectedContractId]
+  )
+
+  const contractStocks = useMemo(() =>
+    selectedContractId ? stocks.filter(s => s.contract_id === selectedContractId) : [],
+    [stocks, selectedContractId]
   )
 
   // Stats
@@ -240,10 +229,10 @@ export function InventorySetup() {
                               variant="ghost" 
                               className="h-6 w-6"
                               onClick={() => {
-                                if (confirm(`Delete contract "${contract.contract_name}"?`)) {
-                                  deleteContract(contract.id)
-                                  toast.success('Contract deleted')
-                                }
+                                toast.info('Delete Contract', {
+                                  description: 'Please use the Contracts page from the main menu to delete contracts.',
+                                  duration: 3000
+                                })
                               }}
                             >
                               <Trash2 className="h-3 w-3" />
@@ -460,6 +449,149 @@ export function InventorySetup() {
                       </Button>
                     </div>
                   )}
+                      </AccordionContent>
+                    </AccordionItem>
+
+                    {/* Stock / Allotments Section */}
+                    <AccordionItem value="stock">
+                      <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+                        <div className="flex items-center gap-2">
+                          <Bed className="h-4 w-4" />
+                          Stock (Allotments)
+                          {contractStocks.length > 0 && (
+                            <Badge variant="secondary" className="ml-2">
+                              {contractStocks.length}
+                            </Badge>
+                          )}
+                        </div>
+                      </AccordionTrigger>
+                      <AccordionContent>
+                        <div className="space-y-4">
+                          {selectedHotel && (
+                            <div className="grid gap-2 p-3 rounded-lg border bg-muted/30">
+                              <div className="grid gap-2">
+                                <Label>Room Type *</Label>
+                                <Select
+                                  value={stockRoomGroupId}
+                                  onValueChange={(value) => setStockRoomGroupId(value)}
+                                >
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="Select a room type" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {(selectedHotel.room_groups || []).map((rg) => (
+                                      <SelectItem key={rg.id} value={rg.id}>
+                                        {rg.room_type} (Capacity: {rg.capacity})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div className="grid gap-2">
+                                <Label>Quantity *</Label>
+                                <Input
+                                  type="number"
+                                  value={stockQuantity}
+                                  onChange={(e) => setStockQuantity(e.target.value)}
+                                  placeholder="e.g., 50"
+                                />
+                              </div>
+                              <div className="grid gap-2">
+                                <Label>Notes (Optional)</Label>
+                                <Textarea
+                                  value={stockNotes}
+                                  onChange={(e) => setStockNotes(e.target.value)}
+                                  placeholder="Internal notes about this allotment"
+                                  rows={2}
+                                />
+                              </div>
+                              <div className="flex justify-end">
+                                <Button
+                                  size="sm"
+                                  onClick={() => {
+                                    const qty = parseInt(stockQuantity)
+                                    if (!stockRoomGroupId) {
+                                      toast.error('Please select a room type')
+                                      return
+                                    }
+                                    if (!qty || qty <= 0) {
+                                      toast.error('Please enter a valid quantity')
+                                      return
+                                    }
+                                    if (!selectedContract) return
+                                    addStock({
+                                      contract_id: selectedContract.id,
+                                      room_group_id: stockRoomGroupId,
+                                      quantity: qty,
+                                      notes: stockNotes || undefined,
+                                    })
+                                    setStockRoomGroupId('')
+                                    setStockQuantity('')
+                                    setStockNotes('')
+                                    toast.success('Stock added')
+                                  }}
+                                >
+                                  Add Stock
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+
+                          {contractStocks.length > 0 ? (
+                            <div className="space-y-2">
+                              {contractStocks.map((s) => (
+                                <div key={s.id} className="p-3 rounded-lg border flex items-center justify-between">
+                                  <div className="space-y-1">
+                                    <div className="flex items-center gap-2">
+                                      <Badge variant="outline">{s.roomName}</Badge>
+                                      <span className="text-sm">Qty: <span className="font-medium">{s.quantity}</span></span>
+                                    </div>
+                                    {s.notes && (
+                                      <p className="text-xs text-muted-foreground">{s.notes}</p>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-1">
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      onClick={() => {
+                                        const next = prompt('Update quantity', String(s.quantity))
+                                        if (!next) return
+                                        const n = parseInt(next)
+                                        if (!n || n < 0) {
+                                          toast.error('Invalid quantity')
+                                          return
+                                        }
+                                        updateStock(s.id, { quantity: n })
+                                        toast.success('Stock updated')
+                                      }}
+                                    >
+                                      <Pencil className="h-3 w-3" />
+                                    </Button>
+                                    <Button
+                                      size="icon"
+                                      variant="ghost"
+                                      className="h-7 w-7"
+                                      onClick={() => {
+                                        if (confirm(`Delete stock for ${s.roomName}?`)) {
+                                          deleteStock(s.id)
+                                          toast.success('Stock deleted')
+                                        }
+                                      }}
+                                    >
+                                      <Trash2 className="h-3 w-3" />
+                                    </Button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-sm text-muted-foreground">
+                              No stock yet. Add allotments above.
+                            </p>
+                          )}
+                        </div>
                       </AccordionContent>
                     </AccordionItem>
                   </Accordion>
