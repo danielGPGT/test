@@ -1,0 +1,69 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0.9842 0.0034 247.8575;
+    --foreground: 0.2795 0.0368 260.0310;
+    --card: 1.0000 0 0;
+    --card-foreground: 0.2795 0.0368 260.0310;
+    --popover: 1.0000 0 0;
+    --popover-foreground: 0.2795 0.0368 260.0310;
+    --primary: 0.5670 0.0913 208.6516;
+    --primary-foreground: 1.0000 0 0;
+    --secondary: 0.8950 0.1672 161.0658;
+    --secondary-foreground: 0.3729 0.0306 259.7328;
+    --muted: 0.9670 0.0029 264.5419;
+    --muted-foreground: 0.5510 0.0234 264.3637;
+    --accent: 0.9606 0.0213 186.0241;
+    --accent-foreground: 0.3729 0.0306 259.7328;
+    --destructive: 0.6368 0.2078 25.3313;
+    --destructive-foreground: 1.0000 0 0;
+    --border: 0.8717 0.0093 258.3382;
+    --input: 0.8717 0.0093 258.3382;
+    --ring: 0.5670 0.0913 208.6516;
+    --chart-1: 0.6902 0.1113 208.7038;
+    --chart-2: 0.6275 0.1019 208.6106;
+    --chart-3: 0.5142 0.0817 208.4195;
+    --chart-4: 0.4305 0.0682 209.0343;
+    --chart-5: 0.3663 0.0568 207.2626;
+    --radius: 0.5rem;
+  }
+  
+  .dark {
+    --background: 0.2077 0.0398 265.7549;
+    --foreground: 0.9288 0.0126 255.5078;
+    --card: 0.2795 0.0368 260.0310;
+    --card-foreground: 0.9288 0.0126 255.5078;
+    --popover: 0.2795 0.0368 260.0310;
+    --popover-foreground: 0.9288 0.0126 255.5078;
+    --primary: 0.8187 0.1364 209.8738;
+    --primary-foreground: 0.2393 0 0;
+    --secondary: 0.8950 0.1672 161.0658;
+    --secondary-foreground: 0.2478 0 0;
+    --muted: 0.2427 0.0381 259.9437;
+    --muted-foreground: 0.7137 0.0192 261.3246;
+    --accent: 0.3729 0.0306 259.7328;
+    --accent-foreground: 0.8717 0.0093 258.3382;
+    --destructive: 0.6368 0.2078 25.3313;
+    --destructive-foreground: 0.2077 0.0398 265.7549;
+    --border: 0.4461 0.0263 256.8018;
+    --input: 0.4461 0.0263 256.8018;
+    --ring: 0.8187 0.1364 209.8738;
+    --chart-1: 0.8187 0.1364 209.8738;
+    --chart-2: 0.7649 0.1253 208.8173;
+    --chart-3: 0.6896 0.1136 209.1618;
+    --chart-4: 0.5421 0.0872 208.4257;
+    --chart-5: 0.4333 0.0695 208.7075;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}
