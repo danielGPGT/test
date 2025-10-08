@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { DataTable } from '@/components/ui/data-table'
 import { Button } from '@/components/ui/button'
+import { BOARD_TYPE_LABELS } from '@/lib/pricing'
 import {
   Dialog,
   DialogContent,
@@ -22,7 +23,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { useData, Booking } from '@/contexts/data-context'
+import { useData, Booking, OccupancyType } from '@/contexts/data-context'
 import { Plus, AlertCircle, Users, FileText, Info, CheckCircle2 } from 'lucide-react'
 import {
   Accordion,
@@ -33,14 +34,17 @@ import {
 import { formatCurrency } from '@/lib/utils'
 
 export function Bookings() {
-  const { bookings, tours, listings, rates, stocks, contracts, addBooking, cancelBooking, recordPurchaseDetails } = useData()
+  const { bookings, tours, listings, rates, contracts, hotels, addBooking, cancelBooking, recordPurchaseDetails } = useData()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isPurchaseFormOpen, setIsPurchaseFormOpen] = useState(false)
   const [selectedBookingForPurchase, setSelectedBookingForPurchase] = useState<Booking | null>(null)
+  const [isViewOpen, setIsViewOpen] = useState(false)
+  const [viewingBooking, setViewingBooking] = useState<Booking | null>(null)
   const [formData, setFormData] = useState({
     tour_id: 0,
     listing_id: 0,
     rate_id: 0, // New field for rate selection
+    occupancy_type: 'double' as OccupancyType, // Selected occupancy type
     // New booking controls
     check_in_date: '',
     check_out_date: '',
@@ -54,6 +58,7 @@ export function Bookings() {
     second_listing_id: 0,
     second_rate_id: 0,
     second_quantity: 0,
+    second_occupancy_type: 'double' as OccupancyType,
   })
 
   const [purchaseFormData, setPurchaseFormData] = useState({
@@ -81,18 +86,24 @@ export function Bookings() {
     return listings
       .filter(l => l.tour_id === selectedTour.id)
       .map(l => {
-        // For inventory listings, check stock availability
-        if (l.purchase_type === 'inventory' && l.stock_id) {
-          const stock = stocks.find(s => s.id === l.stock_id)
+        // For inventory listings, check availability from contract room allocations
+        if (l.purchase_type === 'inventory' && l.contract_id) {
+          const contract = contracts.find(c => c.id === l.contract_id)
+          const allocation = contract?.room_allocations?.find(a => a.room_group_id === l.room_group_id)
+          
+          // Calculate sold rooms for this listing
           const sold = bookings
-            .filter(b => b.listing_id === l.id && b.status !== 'cancelled')
-            .reduce((sum, b) => sum + b.quantity, 0)
+            .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
+            .flatMap(b => b.rooms)
+            .filter(r => r.listing_id === l.id)
+            .reduce((sum, r) => sum + r.quantity, 0)
+          
           return {
             ...l,
-            available: stock ? stock.quantity - sold : 0
+            available: allocation ? allocation.quantity - sold : 0
           }
         }
-        // For buy-to-order or listings without stock, always show (flexible)
+        // For buy-to-order, always show (flexible)
         return {
           ...l,
           available: 999 // Large number to indicate flexible capacity
@@ -106,7 +117,7 @@ export function Bookings() {
         // Buy-to-order: always show (flexible capacity)
         return true
       })
-  }, [selectedTour, listings, stocks, bookings])
+  }, [selectedTour, listings, contracts, bookings])
 
   // Get selected listing
   const selectedListing = useMemo(() => 
@@ -114,7 +125,7 @@ export function Bookings() {
     [availableListings, formData.listing_id]
   )
 
-  // Get available rates for selected listing
+  // Get available rates for selected listing (all occupancies)
   const availableRates = useMemo(() => {
     if (!selectedListing) return []
     
@@ -128,24 +139,58 @@ export function Bookings() {
     
     // For buy-to-order listings: find rates for the hotel and room group
     if (selectedListing.purchase_type === 'buy_to_order' && selectedListing.hotel_id) {
-      // Find contracts for this hotel and get their rates
-      const hotelContracts = contracts.filter(c => c.hotel_id === selectedListing.hotel_id)
-      const contractIds = hotelContracts.map(c => c.id)
-      
-      return rates.filter(rate => 
-        contractIds.includes(rate.contract_id) && 
-        rate.room_group_id === selectedListing.room_group_id
-      )
+      return rates.filter(rate => {
+        // Match room type
+        if (rate.room_group_id !== selectedListing.room_group_id) return false
+        
+        // Include hotel-based buy-to-order rates
+        if (rate.hotel_id === selectedListing.hotel_id) return true
+        
+        // Also include contract rates for this hotel (fallback)
+        if (rate.contract_id) {
+          const contract = contracts.find(c => c.id === rate.contract_id)
+          return contract && contract.hotel_id === selectedListing.hotel_id
+        }
+        
+        return false
+      })
     }
     
     return []
   }, [selectedListing, rates, contracts])
 
-  // Get available listings for second room (exclude first selected room)
+  // Get selected rate
+  const selectedRate = useMemo(() => 
+    availableRates.find(r => r.id === formData.rate_id),
+    [availableRates, formData.rate_id]
+  )
+
+  // Get unique occupancy types available for selected listing and board type
+  const availableOccupancies = useMemo(() => {
+    if (!selectedRate) return []
+    
+    // Find all rates with the same contract, room, and board
+    const matchingRates = availableRates.filter(r => 
+      r.contract_id === selectedRate.contract_id &&
+      r.room_group_id === selectedRate.room_group_id &&
+      r.board_type === selectedRate.board_type
+    )
+    
+    return matchingRates.map(r => ({
+      occupancy: r.occupancy_type,
+      rate: r,
+      price: r.rate
+    }))
+  }, [selectedRate, availableRates])
+
+  // Get available listings for second room (include same room type - allows same room with different occupancy)
   const availableSecondListings = useMemo(() => {
     if (!selectedListing) return []
     
-    return availableListings.filter(l => l.id !== selectedListing.id)
+    console.log('📋 Available second listings:', availableListings.length, 'listings')
+    
+    // Allow same room type (e.g., Standard Double) so you can book Double + Single of same room
+    return availableListings
   }, [availableListings, selectedListing])
 
   // Get selected second listing
@@ -154,7 +199,7 @@ export function Bookings() {
     [availableSecondListings, formData.second_listing_id]
   )
 
-  // Get available rates for second listing
+  // Get available rates for second listing (all occupancies)
   const availableSecondRates = useMemo(() => {
     if (!selectedSecondListing) return []
     
@@ -168,14 +213,21 @@ export function Bookings() {
     
     // For buy-to-order listings: find rates for the hotel and room group
     if (selectedSecondListing.purchase_type === 'buy_to_order' && selectedSecondListing.hotel_id) {
-      // Find contracts for this hotel and get their rates
-      const hotelContracts = contracts.filter(c => c.hotel_id === selectedSecondListing.hotel_id)
-      const contractIds = hotelContracts.map(c => c.id)
-      
-      return rates.filter(rate => 
-        contractIds.includes(rate.contract_id) && 
-        rate.room_group_id === selectedSecondListing.room_group_id
-      )
+      return rates.filter(rate => {
+        // Match room type
+        if (rate.room_group_id !== selectedSecondListing.room_group_id) return false
+        
+        // Include hotel-based buy-to-order rates
+        if (rate.hotel_id === selectedSecondListing.hotel_id) return true
+        
+        // Also include contract rates for this hotel (fallback)
+        if (rate.contract_id) {
+          const contract = contracts.find(c => c.id === rate.contract_id)
+          return contract && contract.hotel_id === selectedSecondListing.hotel_id
+        }
+        
+        return false
+      })
     }
     
     return []
@@ -187,11 +239,22 @@ export function Bookings() {
     [availableSecondRates, formData.second_rate_id]
   )
 
-  // Get selected rate
-  const selectedRate = useMemo(() => 
-    availableRates.find(r => r.id === formData.rate_id),
-    [availableRates, formData.rate_id]
-  )
+  // Get available occupancies for second room
+  const availableSecondOccupancies = useMemo(() => {
+    if (!selectedSecondRate) return []
+    
+    const matchingRates = availableSecondRates.filter(r => 
+      r.contract_id === selectedSecondRate.contract_id &&
+      r.room_group_id === selectedSecondRate.room_group_id &&
+      r.board_type === selectedSecondRate.board_type
+    )
+    
+    return matchingRates.map(r => ({
+      occupancy: r.occupancy_type,
+      rate: r,
+      price: r.rate
+    }))
+  }, [selectedSecondRate, availableSecondRates])
 
   // Get selected contract for pricing calculations
   const selectedContract = useMemo(() => {
@@ -201,17 +264,37 @@ export function Bookings() {
       return contracts.find(c => c.id === selectedListing.contract_id)
     }
     
-    // For buy-to-order, find any contract for the hotel
-    if (selectedListing.purchase_type === 'buy_to_order' && selectedListing.hotel_id) {
-      return contracts.find(c => c.hotel_id === selectedListing.hotel_id)
+    // For buy-to-order with rate that has contract_id, use that contract
+    if (selectedRate && selectedRate.contract_id) {
+      return contracts.find(c => c.id === selectedRate.contract_id)
+    }
+    
+    // For buy-to-order with hotel-based rate (no contract), create mock contract from rate
+    if (selectedRate && selectedRate.hotel_id) {
+      return {
+        id: 0,
+        hotel_id: selectedRate.hotel_id,
+        hotelName: selectedRate.hotelName || '',
+        contract_name: 'Buy-to-Order',
+        start_date: '',
+        end_date: '',
+        total_rooms: 999,
+        base_rate: selectedRate.rate,
+        currency: selectedRate.currency || 'EUR',
+        tax_rate: selectedRate.tax_rate || 0,
+        city_tax_per_person_per_night: selectedRate.city_tax_per_person_per_night || 0,
+        resort_fee_per_night: selectedRate.resort_fee_per_night || 0,
+        supplier_commission_rate: selectedRate.supplier_commission_rate || 0,
+        board_options: [],
+      } as any
     }
     
     return null
-  }, [selectedListing, contracts])
+  }, [selectedListing, selectedRate, contracts])
 
-  // Calculate price for a single room type
-  const calculateRoomPrice = (rate: any, contract: any, quantity: number) => {
-    if (!rate || !contract || quantity <= 0) return 0
+  // Calculate detailed price breakdown for a single room type
+  const calculateRoomPrice = (rate: any, contract: any, quantity: number, occupancy: OccupancyType) => {
+    if (!rate || !contract || quantity <= 0) return { total: 0, breakdown: null }
 
     const checkInDate = new Date(effectiveCheckIn)
     const checkOutDate = new Date(effectiveCheckOut)
@@ -221,14 +304,42 @@ export function Bookings() {
     // Calculate number of nights
     const nights = Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24))
     
-    let totalBasePrice = 0
+    // Night-by-night breakdown
+    const nightlyBreakdown: Array<{
+      date: string
+      type: 'contract' | 'pre_shoulder' | 'post_shoulder'
+      rate: number
+      baseRate: number
+      boardCost: number
+    }> = []
+    
+    // Rate is already for the correct occupancy type (no calculation needed!)
+    const roomRate = rate.rate
+    
+    // Determine board cost based on rate structure
+    const peoplePerRoom = occupancy === 'single' ? 1 : occupancy === 'double' ? 2 : occupancy === 'triple' ? 3 : 4
+    let boardCostPerNight = 0
+    
+    if (rate.board_included) {
+      // Get board cost from contract (per person per night)
+      const boardOption = contract.board_options?.find((b: any) => b.board_type === rate.board_type)
+      if (boardOption) {
+        boardCostPerNight = boardOption.additional_cost * peoplePerRoom // Multiply by occupancy!
+      }
+    } else if (rate.board_cost) {
+      // Board cost override (total per room)
+      boardCostPerNight = rate.board_cost
+    }
+    
+    let totalRoomRateBeforeCommission = 0
     
     // Calculate base price for each night
     for (let i = 0; i < nights; i++) {
       const currentDate = new Date(checkInDate)
       currentDate.setDate(currentDate.getDate() + i)
       
-      let nightlyRate = rate.rate
+      let nightlyRate = roomRate // Base rate for this occupancy
+      let nightType: 'contract' | 'pre_shoulder' | 'post_shoulder' = 'contract'
       
       // Check if this is a shoulder night
       if (currentDate < contractStartDate) {
@@ -236,52 +347,160 @@ export function Bookings() {
         const daysBefore = Math.ceil((contractStartDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24))
         if (contract.pre_shoulder_rates && contract.pre_shoulder_rates[daysBefore - 1]) {
           nightlyRate = contract.pre_shoulder_rates[daysBefore - 1]
+          nightType = 'pre_shoulder'
         }
       } else if (currentDate > contractEndDate) {
         // Post-shoulder night
         const daysAfter = Math.ceil((currentDate.getTime() - contractEndDate.getTime()) / (1000 * 60 * 60 * 24))
         if (contract.post_shoulder_rates && contract.post_shoulder_rates[daysAfter - 1]) {
           nightlyRate = contract.post_shoulder_rates[daysAfter - 1]
+          nightType = 'post_shoulder'
         }
       }
       
-      totalBasePrice += nightlyRate
+      totalRoomRateBeforeCommission += nightlyRate
+      
+      nightlyBreakdown.push({
+        date: currentDate.toISOString().split('T')[0],
+        type: nightType,
+        rate: nightlyRate + boardCostPerNight, // Total including board if separate
+        baseRate: nightlyRate,
+        boardCost: boardCostPerNight
+      })
     }
+    
+    // Now calculate per-room costs
+    const totalBaseRateForAllNights = totalRoomRateBeforeCommission // Base room rate for all nights
+    const totalBoardCostForAllNights = boardCostPerNight * nights // Separate board cost
+    const totalRoomRate = totalBaseRateForAllNights + totalBoardCostForAllNights // Total including board
+    
+    // Use rate-level costs if available, otherwise fall back to contract
+    const commissionRate = rate.supplier_commission_rate !== undefined ? rate.supplier_commission_rate : (contract.supplier_commission_rate || 0)
+    const taxRate = rate.tax_rate !== undefined ? rate.tax_rate : (contract.tax_rate || 0)
+    const cityTaxPerPerson = rate.city_tax_per_person_per_night !== undefined ? rate.city_tax_per_person_per_night : (contract.city_tax_per_person_per_night || 0)
+    const resortFeePerNight = rate.resort_fee_per_night !== undefined ? rate.resort_fee_per_night : (contract.resort_fee_per_night || 0)
+    
+    // Debug logging
+    console.log('💰 BOOKING CALCULATION DEBUG:', {
+      occupancy,
+      peoplePerRoom,
+      rate: {
+        occupancy_type: rate.occupancy_type,
+        rate: rate.rate,
+        board_included: rate.board_included,
+        board_cost: rate.board_cost,
+        city_tax_per_person_per_night: rate.city_tax_per_person_per_night,
+      },
+      contract: {
+        city_tax_per_person_per_night: contract.city_tax_per_person_per_night,
+      },
+      calculated: {
+        cityTaxPerPerson,
+        cityTaxTotal: cityTaxPerPerson * peoplePerRoom * nights,
+        boardCostPerNight,
+      }
+    })
+    
+    // Supplier commission (only on BASE rate, not board)
+    const commissionPerRoom = totalBaseRateForAllNights * commissionRate
+    
+    // Net rate after commission
+    const netBaseRatePerRoom = totalBaseRateForAllNights - commissionPerRoom
+    const netTotalRatePerRoom = netBaseRatePerRoom + totalBoardCostForAllNights
+    
+    // Resort fee per room
+    const resortFeePerRoom = resortFeePerNight * nights
+    
+    // Subtotal before VAT (per room)
+    const subtotalBeforeVATPerRoom = netTotalRatePerRoom + resortFeePerRoom
+    
+    // VAT on subtotal (per room)
+    const vatPerRoom = subtotalBeforeVATPerRoom * taxRate
+    
+    // City tax per room (based on actual occupancy)
+    const cityTaxPerRoom = cityTaxPerPerson * peoplePerRoom * nights
+    
+    // Total cost per room
+    const totalCostPerRoom = subtotalBeforeVATPerRoom + vatPerRoom + cityTaxPerRoom
+    
+    // Calculate selling prices with markup
+    const markupPercentage = rate.markup_percentage ?? 0.60 // Default 60%
+    const shoulderMarkupPercentage = rate.shoulder_markup_percentage ?? 0.30 // Default 30%
+    
+    // Calculate number of regular vs shoulder nights
+    const regularNights = nightlyBreakdown.filter(n => n.type === 'contract').length
+    const shoulderNights = nightlyBreakdown.filter(n => n.type !== 'contract').length
+    
+    // Apply different markup to regular and shoulder nights
+    const costPerRegularNight = regularNights > 0 ? (totalCostPerRoom / nights) : 0
+    const costPerShoulderNight = shoulderNights > 0 ? (totalCostPerRoom / nights) : 0
+    
+    const sellingPriceRegularNights = costPerRegularNight * regularNights * (1 + markupPercentage)
+    const sellingPriceShoulderNights = costPerShoulderNight * shoulderNights * (1 + shoulderMarkupPercentage)
+    const totalSellingPricePerRoom = sellingPriceRegularNights + sellingPriceShoulderNights
     
     // Apply quantity
-    totalBasePrice *= quantity
-    
-    // Calculate taxes and fees
-    let totalTaxes = 0
-    let totalFees = 0
-    
-    // VAT/Sales tax
-    if (contract.tax_rate) {
-      totalTaxes += totalBasePrice * contract.tax_rate
+    const breakdown = {
+      nights,
+      quantity,
+      nightlyBreakdown,
+      regularNights,
+      shoulderNights,
+      // Per room calculations
+      perRoom: {
+        baseRate: totalBaseRateForAllNights,
+        boardCost: totalBoardCostForAllNights,
+        totalRoomRate: totalRoomRate,
+        commission: commissionPerRoom,
+        netBaseRate: netBaseRatePerRoom,
+        netTotalRate: netTotalRatePerRoom,
+        resortFee: resortFeePerRoom,
+        subtotalBeforeVAT: subtotalBeforeVATPerRoom,
+        vat: vatPerRoom,
+        cityTax: cityTaxPerRoom,
+        totalCost: totalCostPerRoom,
+        sellingPrice: totalSellingPricePerRoom,
+        markup: totalSellingPricePerRoom - totalCostPerRoom
+      },
+      // Total for all rooms
+      total: {
+        baseRate: totalBaseRateForAllNights * quantity,
+        boardCost: totalBoardCostForAllNights * quantity,
+        totalRoomRate: totalRoomRate * quantity,
+        commission: commissionPerRoom * quantity,
+        netBaseRate: netBaseRatePerRoom * quantity,
+        netTotalRate: netTotalRatePerRoom * quantity,
+        resortFee: resortFeePerRoom * quantity,
+        subtotalBeforeVAT: subtotalBeforeVATPerRoom * quantity,
+        vat: vatPerRoom * quantity,
+        cityTax: cityTaxPerRoom * quantity,
+        totalCost: totalCostPerRoom * quantity,
+        sellingPrice: totalSellingPricePerRoom * quantity,
+        markup: (totalSellingPricePerRoom - totalCostPerRoom) * quantity
+      },
+      contractInfo: {
+        commissionRate: commissionRate,
+        taxRate: taxRate,
+        cityTaxPerPersonPerNight: cityTaxPerPerson,
+        resortFeePerNight: resortFeePerNight
+      },
+      markupInfo: {
+        regularMarkup: markupPercentage,
+        shoulderMarkup: shoulderMarkupPercentage
+      }
     }
     
-    // City tax per person per night
-    if (contract.city_tax_per_person_per_night) {
-      // Assume 2 people per room for city tax calculation
-      const peoplePerRoom = 2
-      totalFees += contract.city_tax_per_person_per_night * peoplePerRoom * nights * quantity
-    }
-    
-    // Resort fee per room per night
-    if (contract.resort_fee_per_night) {
-      totalFees += contract.resort_fee_per_night * nights * quantity
-    }
-    
-    return totalBasePrice + totalTaxes + totalFees
+    return { total: totalCostPerRoom * quantity, breakdown }
   }
 
   // Calculate total price including both rooms
-  const calculateTotalPrice = useMemo(() => {
+  const priceCalculation = useMemo(() => {
     if (!selectedRate || !selectedContract || !selectedTour || formData.quantity <= 0) {
-      return 0
+      return { total: 0, firstRoom: null, secondRoom: null }
     }
 
-    let totalPrice = calculateRoomPrice(selectedRate, selectedContract, formData.quantity)
+    const firstRoom = calculateRoomPrice(selectedRate, selectedContract, formData.quantity, formData.occupancy_type)
+    let secondRoom = null
     
     // Add second room if selected
     if (selectedSecondRate && selectedSecondListing && formData.second_quantity > 0) {
@@ -290,12 +509,33 @@ export function Bookings() {
         : contracts.find(c => c.hotel_id === selectedSecondListing.hotel_id)
       
       if (secondContract) {
-        totalPrice += calculateRoomPrice(selectedSecondRate, secondContract, formData.second_quantity)
+        secondRoom = calculateRoomPrice(selectedSecondRate, secondContract, formData.second_quantity, formData.second_occupancy_type)
       }
     }
     
-    return totalPrice
-  }, [selectedRate, selectedContract, selectedTour, formData.quantity, selectedSecondRate, selectedSecondListing, formData.second_quantity, effectiveCheckIn, effectiveCheckOut, contracts])
+    return {
+      total: firstRoom.total + (secondRoom?.total || 0),
+      firstRoom: firstRoom.breakdown,
+      secondRoom: secondRoom?.breakdown || null
+    }
+  }, [selectedRate, selectedContract, selectedTour, formData.quantity, formData.occupancy_type, selectedSecondRate, selectedSecondListing, formData.second_quantity, formData.second_occupancy_type, effectiveCheckIn, effectiveCheckOut, contracts])
+
+  // Transform bookings for table display (flatten rooms for display)
+  const bookingsTableData = useMemo(() => 
+    bookings
+      .filter(booking => booking.rooms && booking.rooms.length > 0) // Filter out bookings without rooms array
+      .map(booking => ({
+        ...booking,
+        // Show summary of rooms with hotel
+        roomsSummary: booking.rooms.map(r => `${r.quantity}× ${r.hotelName} - ${r.roomName} (${r.occupancy_type})`).join(' + '),
+        totalRoomCount: booking.rooms.reduce((sum, r) => sum + r.quantity, 0),
+        totalGuests: booking.rooms.reduce((sum, r) => {
+          const people = r.occupancy_type === 'single' ? 1 : r.occupancy_type === 'double' ? 2 : r.occupancy_type === 'triple' ? 3 : 4
+          return sum + (people * r.quantity)
+        }, 0),
+      })),
+    [bookings]
+  )
 
   const columns = [
     { header: 'ID', accessor: 'id', width: 60 },
@@ -304,20 +544,15 @@ export function Bookings() {
       accessor: 'status',
       format: 'badge' as const,
     },
-    { 
-      header: 'Type', 
-      accessor: 'purchase_type',
-      format: 'badge' as const,
-    },
     { header: 'Tour', accessor: 'tourName' },
-    { header: 'Room', accessor: 'roomName' },
-    { header: 'Occupancy', accessor: 'occupancy_type', format: 'badge' as const },
+    { header: 'Rooms', accessor: 'roomsSummary', truncate: true },
+    { header: '# Rooms', accessor: 'totalRoomCount' },
+    { header: 'Guests', accessor: 'totalGuests' },
     { header: 'Customer', accessor: 'customer_name' },
     { header: 'Email', accessor: 'customer_email', truncate: true },
-    { header: 'Rooms', accessor: 'quantity' },
     { header: 'Total Price', accessor: 'total_price', format: 'currency' as const },
     { header: 'Booking Date', accessor: 'booking_date', format: 'date' as const },
-    { header: 'Actions', accessor: 'actions', type: 'actions' as const, actions: ['view'] },
+    { header: 'Actions', accessor: 'actions', type: 'actions' as const, actions: ['view', 'delete'] },
   ]
 
   const handleCreate = () => {
@@ -328,45 +563,84 @@ export function Bookings() {
     const checkOutDate = new Date(effectiveCheckOut)
     const nights = Math.ceil((checkOutDate.getTime() - checkInDate.getTime()) / (1000 * 60 * 60 * 24))
 
-    // Create first booking
-    const firstRoomPrice = calculateRoomPrice(selectedRate, selectedContract, formData.quantity)
-    addBooking({
+    // Build rooms array
+    const rooms: any[] = []
+
+    // First room
+    const firstRoomCalc = calculateRoomPrice(selectedRate, selectedContract, formData.quantity, formData.occupancy_type)
+    if (!firstRoomCalc.breakdown) {
+      alert('Error calculating room price')
+      return
+    }
+    
+    const firstHotel = selectedListing.purchase_type === 'inventory' && selectedListing.hotel_id
+      ? hotels.find(h => h.id === selectedListing.hotel_id)
+      : null
+    
+    rooms.push({
       listing_id: formData.listing_id,
       rate_id: formData.rate_id,
-      customer_name: formData.customer_name,
-      customer_email: formData.customer_email,
+      hotelName: firstHotel?.name || selectedListing.hotelName || 'Unknown Hotel',
+      roomName: selectedListing.roomName,
+      contractName: selectedContract.contract_name,
+      occupancy_type: formData.occupancy_type,
+      board_type: selectedRate.board_type,
+      purchase_type: selectedListing.purchase_type,
       quantity: formData.quantity,
-      total_price: firstRoomPrice,
-      // Required fields
-      occupancy_type: selectedRate.occupancy_type,
-      check_in_date: effectiveCheckIn,
-      check_out_date: effectiveCheckOut,
-      nights: nights,
+      price_per_room: firstRoomCalc.breakdown.perRoom.sellingPrice, // Use selling price
+      total_price: firstRoomCalc.breakdown.total.sellingPrice, // Use selling price
+      purchase_status: selectedListing.purchase_type === 'buy_to_order' ? 'pending_purchase' : 'not_required',
     })
 
-    // Create second booking if second room is selected
+    // Second room (if selected)
     if (selectedSecondRate && selectedSecondListing && formData.second_quantity > 0) {
       const secondContract = selectedSecondListing.purchase_type === 'inventory' && selectedSecondListing.contract_id
         ? contracts.find(c => c.id === selectedSecondListing.contract_id)
         : contracts.find(c => c.hotel_id === selectedSecondListing.hotel_id)
       
       if (secondContract) {
-        const secondRoomPrice = calculateRoomPrice(selectedSecondRate, secondContract, formData.second_quantity)
-        addBooking({
+        const secondRoomCalc = calculateRoomPrice(selectedSecondRate, secondContract, formData.second_quantity, formData.second_occupancy_type)
+        if (!secondRoomCalc.breakdown) {
+          alert('Error calculating second room price')
+          return
+        }
+        
+        const secondHotel = selectedSecondListing.purchase_type === 'inventory' && selectedSecondListing.hotel_id
+          ? hotels.find(h => h.id === selectedSecondListing.hotel_id)
+          : null
+        
+        rooms.push({
           listing_id: formData.second_listing_id,
           rate_id: formData.second_rate_id,
-          customer_name: formData.customer_name,
-          customer_email: formData.customer_email,
+          hotelName: secondHotel?.name || selectedSecondListing.hotelName || 'Unknown Hotel',
+          roomName: selectedSecondListing.roomName,
+          contractName: secondContract.contract_name,
+          occupancy_type: formData.second_occupancy_type,
+          board_type: selectedSecondRate.board_type,
+          purchase_type: selectedSecondListing.purchase_type,
           quantity: formData.second_quantity,
-          total_price: secondRoomPrice,
-          // Required fields
-          occupancy_type: selectedSecondRate.occupancy_type,
-          check_in_date: effectiveCheckIn,
-          check_out_date: effectiveCheckOut,
-          nights: nights,
+          price_per_room: secondRoomCalc.breakdown.perRoom.sellingPrice, // Use selling price
+          total_price: secondRoomCalc.breakdown.total.sellingPrice, // Use selling price
+          purchase_status: selectedSecondListing.purchase_type === 'buy_to_order' ? 'pending_purchase' : 'not_required',
         })
       }
     }
+
+    // Create single booking with multiple rooms - total is selling price to client
+    const totalPrice = rooms.reduce((sum, room) => sum + room.total_price, 0)
+    
+    console.log('✅ Creating booking with rooms:', rooms)
+    
+    addBooking({
+      tour_id: formData.tour_id,
+          customer_name: formData.customer_name,
+          customer_email: formData.customer_email,
+          check_in_date: effectiveCheckIn,
+          check_out_date: effectiveCheckOut,
+          nights: nights,
+      rooms: rooms,
+      total_price: totalPrice,
+        })
 
     setIsCreateOpen(false)
     resetForm()
@@ -377,6 +651,7 @@ export function Bookings() {
       tour_id: 0,
       listing_id: 0,
       rate_id: 0,
+      occupancy_type: 'double',
       check_in_date: '',
       check_out_date: '',
       adults: 2,
@@ -388,7 +663,13 @@ export function Bookings() {
       second_listing_id: 0,
       second_rate_id: 0,
       second_quantity: 0,
+      second_occupancy_type: 'double',
     })
+  }
+
+  const handleView = (booking: Booking) => {
+    setViewingBooking(booking)
+    setIsViewOpen(true)
   }
 
   const handleCancel = (booking: Booking) => {
@@ -397,19 +678,32 @@ export function Bookings() {
       return
     }
 
-    if (confirm(`Cancel booking for ${booking.customer_name}? This will return ${booking.quantity} room(s) to inventory.`)) {
+    if (!booking.rooms || booking.rooms.length === 0) {
+      alert('This booking has no rooms')
+      return
+    }
+
+    const totalRooms = booking.rooms.reduce((sum, r) => sum + r.quantity, 0)
+    if (confirm(`Cancel booking for ${booking.customer_name}? This will return ${totalRooms} room(s) to inventory.`)) {
       cancelBooking(booking.id)
     }
   }
 
   const handleOpenPurchaseForm = (booking: Booking) => {
-    if (booking.purchase_type !== 'buy_to_order') {
+    if (!booking.rooms || booking.rooms.length === 0) {
+      alert('This booking has no rooms')
+      return
+    }
+
+    const hasBuyToOrder = booking.rooms.some(r => r.purchase_type === 'buy_to_order')
+    if (!hasBuyToOrder) {
       alert('This booking doesn\'t require purchase entry')
       return
     }
 
-    if (booking.purchase_status === 'purchased') {
-      alert('Purchase details already entered for this booking')
+    const allPurchased = booking.rooms.every(r => r.purchase_type !== 'buy_to_order' || r.purchase_status === 'purchased')
+    if (allPurchased) {
+      alert('Purchase details already entered for all rooms')
       return
     }
 
@@ -437,10 +731,7 @@ export function Bookings() {
     setIsPurchaseFormOpen(false)
     setSelectedBookingForPurchase(null)
     
-    const totalCost = purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity
-    const profit = selectedBookingForPurchase.total_price - totalCost
-    
-    alert(`✅ Purchase recorded successfully!\n\nBooking Status: CONFIRMED\nTotal Cost: ${formatCurrency(totalCost)}\nProfit Margin: ${formatCurrency(profit)}`)
+    alert(`✅ Purchase recorded successfully!\n\nBooking Status: CONFIRMED`)
   }
 
   // Calculate statistics
@@ -450,8 +741,9 @@ export function Bookings() {
       .filter(b => b.status === 'confirmed')
       .reduce((sum, b) => sum + b.total_price, 0)
     const totalRooms = bookings
-      .filter(b => b.status === 'confirmed')
-      .reduce((sum, b) => sum + b.quantity, 0)
+      .filter(b => b.status === 'confirmed' && b.rooms && b.rooms.length > 0)
+      .flatMap(b => b.rooms)
+      .reduce((sum, r) => sum + r.quantity, 0)
 
     return { confirmed, totalRevenue, totalRooms }
   }, [bookings])
@@ -554,41 +846,258 @@ export function Bookings() {
                       </div>
                     </div>
                   )}
-                  {formData.quantity > 0 && selectedRate && selectedContract && (
-                    <div className="mt-4 p-3 bg-background rounded-md border">
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="text-sm font-medium">Total Price:</span>
-                          <span className="text-lg font-bold text-primary">
-                            {formatCurrency(calculateTotalPrice)}
-                          </span>
-                        </div>
-                        {selectedContract && (
-                          <div className="text-xs text-muted-foreground space-y-1">
-                            <div className="flex justify-between">
-                              <span>Base rate:</span>
-                              <span>{formatCurrency(selectedRate.rate)} per night</span>
+                  {formData.quantity > 0 && selectedRate && selectedContract && priceCalculation.firstRoom && (
+                    <div className="mt-4 space-y-3">
+                      {/* Night-by-Night Breakdown */}
+                      <Accordion type="single" collapsible className="border rounded-lg">
+                        <AccordionItem value="nightly" className="border-0">
+                          <AccordionTrigger className="px-3 py-2 hover:no-underline">
+                            <div className="flex items-center gap-2 text-sm font-medium">
+                              <Info className="h-4 w-4" />
+                              Night-by-Night Breakdown ({priceCalculation.firstRoom.nights} nights)
                             </div>
-                            {selectedContract.tax_rate && (
-                              <div className="flex justify-between">
-                                <span>Tax ({Math.round(selectedContract.tax_rate * 100)}%):</span>
-                                <span>{formatCurrency(calculateTotalPrice * selectedContract.tax_rate / (1 + selectedContract.tax_rate))}</span>
+                          </AccordionTrigger>
+                          <AccordionContent className="px-3 pb-3">
+                            <div className="space-y-1">
+                              {priceCalculation.firstRoom.nightlyBreakdown.map((night: any, idx: number) => (
+                                <div key={idx} className="flex items-center justify-between text-xs py-1 border-b last:border-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium">{new Date(night.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+                                    {night.type !== 'contract' && (
+                                      <Badge variant="outline" className="text-xs">
+                                        {night.type === 'pre_shoulder' ? 'Pre-Shoulder' : 'Post-Shoulder'}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-muted-foreground">Base: {formatCurrency(night.baseRate)}</span>
+                                    {night.boardCost > 0 && (
+                                      <span className="text-muted-foreground">+ Board: {formatCurrency(night.boardCost)}</span>
+                                    )}
+                                    <span className="font-medium">= {formatCurrency(night.rate)}</span>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+
+                      {/* Detailed Price Breakdown */}
+                      <Accordion type="single" collapsible className="border rounded-lg">
+                        <AccordionItem value="breakdown" className="border-0">
+                          <AccordionTrigger className="px-3 py-2 hover:no-underline">
+                            <div className="flex items-center justify-between w-full pr-4">
+                              <span className="text-sm font-medium">Price Breakdown ({priceCalculation.firstRoom.nights} nights)</span>
+                              <div className="flex flex-col items-end">
+                                <span className="text-sm text-muted-foreground">Cost: {formatCurrency(priceCalculation.total)}</span>
+                                <span className="text-lg font-bold text-green-600">Sell: {formatCurrency(
+                                  (priceCalculation.firstRoom?.total.sellingPrice || 0) + 
+                                  (priceCalculation.secondRoom?.total.sellingPrice || 0)
+                                )}</span>
+                              </div>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="px-3 pb-3">
+                            <div className="space-y-3">
+                              {/* Room 1 Summary */}
+                              <div className="space-y-2 text-xs pt-2">
+                          <div className="font-medium text-muted-foreground">
+                            Room 1: {selectedListing?.roomName} ({formData.quantity} room{formData.quantity > 1 ? 's' : ''}, {formData.occupancy_type})
+                          </div>
+                          <div className="flex justify-between pl-3">
+                            <span className="text-muted-foreground">Base Rate:</span>
+                            <span>{formatCurrency(priceCalculation.firstRoom.total.baseRate)}</span>
+                          </div>
+                          {priceCalculation.firstRoom.total.boardCost > 0 && (
+                            <div className="flex justify-between pl-3">
+                              <span className="text-muted-foreground">Board Cost:</span>
+                              <span>+{formatCurrency(priceCalculation.firstRoom.total.boardCost)}</span>
+                            </div>
+                          )}
+                          {priceCalculation.firstRoom.contractInfo.commissionRate > 0 && (
+                            <div className="flex justify-between pl-3 text-green-600">
+                              <span>Your Discount (Commission):</span>
+                              <span className="font-medium">-{formatCurrency(priceCalculation.firstRoom.total.commission)}</span>
+                            </div>
+                          )}
+                          {priceCalculation.firstRoom.total.resortFee > 0 && (
+                            <div className="flex justify-between pl-3">
+                              <span className="text-muted-foreground">Resort Fees:</span>
+                              <span>+{formatCurrency(priceCalculation.firstRoom.total.resortFee)}</span>
+                            </div>
+                          )}
+                          {priceCalculation.firstRoom.total.vat > 0 && (
+                            <div className="flex justify-between pl-3">
+                              <span className="text-muted-foreground">VAT:</span>
+                              <span>+{formatCurrency(priceCalculation.firstRoom.total.vat)}</span>
+                            </div>
+                          )}
+                          {priceCalculation.firstRoom.total.cityTax > 0 && (
+                            <div className="flex justify-between pl-3">
+                              <span className="text-muted-foreground">City Tax:</span>
+                              <span>+{formatCurrency(priceCalculation.firstRoom.total.cityTax)}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between pl-3 pt-1 border-t font-medium">
+                            <span>Room 1 Cost:</span>
+                            <span>{formatCurrency(priceCalculation.firstRoom.total.totalCost)}</span>
+                          </div>
+                          
+                          {/* Selling Price */}
+                          <div className="bg-green-50 dark:bg-green-950/30 p-2 rounded-md space-y-1 mt-2">
+                            <div className="flex justify-between text-xs">
+                              <span className="text-muted-foreground">
+                                Markup ({priceCalculation.firstRoom.regularNights > 0 ? `${priceCalculation.firstRoom.regularNights} reg @ ${(priceCalculation.firstRoom.markupInfo.regularMarkup * 100).toFixed(0)}%` : ''}{priceCalculation.firstRoom.shoulderNights > 0 ? `, ${priceCalculation.firstRoom.shoulderNights} shoulder @ ${(priceCalculation.firstRoom.markupInfo.shoulderMarkup * 100).toFixed(0)}%` : ''}):
+                              </span>
+                              <span className="text-green-600 font-medium">+{formatCurrency(priceCalculation.firstRoom.total.markup)}</span>
+                            </div>
+                            <div className="flex justify-between font-semibold border-t border-green-200 pt-1">
+                              <span className="text-green-800 dark:text-green-200">Room 1 Selling Price:</span>
+                              <span className="text-green-700 dark:text-green-300">{formatCurrency(priceCalculation.firstRoom.total.sellingPrice)}</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Room 2 Breakdown (if exists) */}
+                        {priceCalculation.secondRoom && (
+                          <div className="space-y-2 text-xs pt-3 border-t">
+                            <div className="font-medium text-muted-foreground">
+                              Room 2: {selectedSecondListing?.roomName} ({formData.second_quantity} room, {formData.second_occupancy_type})
+                            </div>
+                            <div className="flex justify-between pl-3">
+                              <span className="text-muted-foreground">Base Rate:</span>
+                              <span>{formatCurrency(priceCalculation.secondRoom.total.baseRate)}</span>
+                            </div>
+                            {priceCalculation.secondRoom.total.boardCost > 0 && (
+                              <div className="flex justify-between pl-3">
+                                <span className="text-muted-foreground">Board Cost:</span>
+                                <span>+{formatCurrency(priceCalculation.secondRoom.total.boardCost)}</span>
                               </div>
                             )}
-                            {selectedContract.city_tax_per_person_per_night && (
-                              <div className="flex justify-between">
-                                <span>City tax:</span>
-                                <span>{formatCurrency(selectedContract.city_tax_per_person_per_night * 2 * Math.ceil((new Date(selectedTour?.end_date || '').getTime() - new Date(selectedTour?.start_date || '').getTime()) / (1000 * 60 * 60 * 24)) * formData.quantity)}</span>
+                            {priceCalculation.secondRoom.contractInfo.commissionRate > 0 && (
+                              <div className="flex justify-between pl-3 text-green-600">
+                                <span>Your Discount (Commission):</span>
+                                <span className="font-medium">-{formatCurrency(priceCalculation.secondRoom.total.commission)}</span>
                               </div>
                             )}
-                            {selectedContract.resort_fee_per_night && (
-                              <div className="flex justify-between">
-                                <span>Resort fee:</span>
-                                <span>{formatCurrency(selectedContract.resort_fee_per_night * Math.ceil((new Date(selectedTour?.end_date || '').getTime() - new Date(selectedTour?.start_date || '').getTime()) / (1000 * 60 * 60 * 24)) * formData.quantity)}</span>
+                            {priceCalculation.secondRoom.total.resortFee > 0 && (
+                              <div className="flex justify-between pl-3">
+                                <span className="text-muted-foreground">Resort Fees:</span>
+                                <span>+{formatCurrency(priceCalculation.secondRoom.total.resortFee)}</span>
                               </div>
                             )}
+                            {priceCalculation.secondRoom.total.vat > 0 && (
+                              <div className="flex justify-between pl-3">
+                                <span className="text-muted-foreground">VAT:</span>
+                                <span>+{formatCurrency(priceCalculation.secondRoom.total.vat)}</span>
+                              </div>
+                            )}
+                            {priceCalculation.secondRoom.total.cityTax > 0 && (
+                              <div className="flex justify-between pl-3">
+                                <span className="text-muted-foreground">City Tax:</span>
+                                <span>+{formatCurrency(priceCalculation.secondRoom.total.cityTax)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between pl-3 pt-1 border-t font-medium">
+                              <span>Room 2 Cost:</span>
+                              <span>{formatCurrency(priceCalculation.secondRoom.total.totalCost)}</span>
+                            </div>
+                            
+                            {/* Selling Price */}
+                            <div className="bg-green-50 dark:bg-green-950/30 p-2 rounded-md space-y-1 mt-2">
+                              <div className="flex justify-between text-xs">
+                                <span className="text-muted-foreground">
+                                  Markup ({priceCalculation.secondRoom.regularNights > 0 ? `${priceCalculation.secondRoom.regularNights} reg @ ${(priceCalculation.secondRoom.markupInfo.regularMarkup * 100).toFixed(0)}%` : ''}{priceCalculation.secondRoom.shoulderNights > 0 ? `, ${priceCalculation.secondRoom.shoulderNights} shoulder @ ${(priceCalculation.secondRoom.markupInfo.shoulderMarkup * 100).toFixed(0)}%` : ''}):
+                                </span>
+                                <span className="text-green-600 font-medium">+{formatCurrency(priceCalculation.secondRoom.total.markup)}</span>
+                              </div>
+                              <div className="flex justify-between font-semibold border-t border-green-200 pt-1">
+                                <span className="text-green-800 dark:text-green-200">Room 2 Selling Price:</span>
+                                <span className="text-green-700 dark:text-green-300">{formatCurrency(priceCalculation.secondRoom.total.sellingPrice)}</span>
+                              </div>
+                            </div>
                           </div>
                         )}
+
+                              {/* Grand Total */}
+                              <div className="pt-3 border-t space-y-2">
+                        <div className="flex items-center justify-between">
+                                  <span className="text-sm font-bold">TOTAL COST TO YOU:</span>
+                          <span className="text-lg font-bold text-primary">
+                                    {formatCurrency(priceCalculation.total)}
+                          </span>
+                        </div>
+                                <div className="flex items-center justify-between bg-green-100 dark:bg-green-900 p-2 rounded-md">
+                                  <span className="text-sm font-bold text-green-900 dark:text-green-100">SELLING PRICE TO CLIENT:</span>
+                                  <span className="text-lg font-bold text-green-700 dark:text-green-300">
+                                    {formatCurrency(
+                                      (priceCalculation.firstRoom?.total.sellingPrice || 0) + 
+                                      (priceCalculation.secondRoom?.total.sellingPrice || 0)
+                                    )}
+                                  </span>
+                            </div>
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  <span>Your Profit Margin:</span>
+                                  <span className="font-medium text-green-600">
+                                    {formatCurrency(
+                                      (priceCalculation.firstRoom?.total.markup || 0) + 
+                                      (priceCalculation.secondRoom?.total.markup || 0)
+                                    )}
+                                  </span>
+                                </div>
+                        </div>
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      </Accordion>
+                        
+                      {/* Calculation Verification */}
+                      <div className="text-xs bg-blue-50 dark:bg-blue-950 p-2 rounded border">
+                          <div className="font-medium text-blue-900 dark:text-blue-100 mb-1">📋 Booking Summary:</div>
+                          <div className="space-y-1 text-blue-800 dark:text-blue-200">
+                              <div className="flex justify-between">
+                              <span>Room 1:</span>
+                              <span className="font-medium">{formData.quantity}× {selectedListing?.roomName} ({formData.occupancy_type})</span>
+                              </div>
+                            {priceCalculation.secondRoom && selectedSecondListing && (
+                              <div className="flex justify-between">
+                                <span>Room 2:</span>
+                                <span className="font-medium">{formData.second_quantity}× {selectedSecondListing.roomName} ({formData.second_occupancy_type})</span>
+                              </div>
+                            )}
+                              <div className="flex justify-between">
+                              <span>Total Guests:</span>
+                              <span className="font-medium">
+                                {(() => {
+                                  const room1People = (formData.occupancy_type === 'single' ? 1 : formData.occupancy_type === 'double' ? 2 : formData.occupancy_type === 'triple' ? 3 : 4) * formData.quantity
+                                  const room2People = priceCalculation.secondRoom ? (formData.second_occupancy_type === 'single' ? 1 : formData.second_occupancy_type === 'double' ? 2 : formData.second_occupancy_type === 'triple' ? 3 : 4) * formData.second_quantity : 0
+                                  return room1People + room2People
+                                })()} people
+                              </span>
+                              </div>
+                            <div className="flex justify-between font-semibold pt-1 border-t border-blue-200 dark:border-blue-800">
+                              <span>Total Cost:</span>
+                              <span>{formatCurrency(priceCalculation.total)}</span>
+                          </div>
+                            <div className="flex justify-between font-semibold text-green-700 dark:text-green-300">
+                              <span>Selling Price:</span>
+                              <span>{formatCurrency(
+                                (priceCalculation.firstRoom?.total.sellingPrice || 0) + 
+                                (priceCalculation.secondRoom?.total.sellingPrice || 0)
+                              )}</span>
+                          </div>
+                            <div className="flex justify-between text-green-600 dark:text-green-400">
+                              <span>Your Profit:</span>
+                              <span className="font-semibold">{formatCurrency(
+                                (priceCalculation.firstRoom?.total.markup || 0) + 
+                                (priceCalculation.secondRoom?.total.markup || 0)
+                              )}</span>
+                          </div>
+                            <div className="text-xs text-blue-600 dark:text-blue-300 pt-1 border-t border-blue-200 dark:border-blue-800">
+                              ✓ {priceCalculation.secondRoom ? '2 booking records will be created' : '1 booking record will be created'}
+                            </div>
+                          </div>
                       </div>
                     </div>
                   )}
@@ -663,13 +1172,20 @@ export function Bookings() {
                   <SelectContent>
                     {availableListings.map((listing) => (
                       <SelectItem key={listing.id} value={listing.id.toString()}>
+                        <div className="flex flex-col">
                         <div className="flex items-center justify-between w-full">
-                          <span>{listing.roomName}</span>
+                            <span className="font-medium">{listing.roomName}</span>
                           <span className="ml-4 text-xs text-muted-foreground">
                             {listing.purchase_type === 'inventory' 
                               ? `${listing.available} available`
                               : `${listing.sold} sold (flexible)`}
                           </span>
+                          </div>
+                          {listing.contractName && (
+                            <span className="text-xs text-muted-foreground">
+                              Contract: {listing.contractName}
+                            </span>
+                          )}
                         </div>
                       </SelectItem>
                     ))}
@@ -686,7 +1202,15 @@ export function Bookings() {
                   <Label htmlFor="rate_id">Rate Plan *</Label>
                   <Select
                     value={formData.rate_id.toString()}
-                    onValueChange={(value) => setFormData({ ...formData, rate_id: parseInt(value) })}
+                    onValueChange={(value) => {
+                      const rateId = parseInt(value)
+                      const selectedRate = availableRates.find(r => r.id === rateId)
+                      setFormData({ 
+                        ...formData, 
+                        rate_id: rateId,
+                        occupancy_type: selectedRate?.occupancy_type || 'double' // Set occupancy to match rate
+                      })
+                    }}
                     disabled={availableRates.length === 0}
                   >
                     <SelectTrigger>
@@ -700,20 +1224,22 @@ export function Bookings() {
                       {availableRates.map((rate) => (
                         <SelectItem key={rate.id} value={rate.id.toString()}>
                           <div className="flex items-center justify-between w-full">
-                            <span>
-                              {rate.occupancy_type.charAt(0).toUpperCase() + rate.occupancy_type.slice(1)} • {rate.board_type.replace('_', ' ')}
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {BOARD_TYPE_LABELS[rate.board_type] || rate.board_type.replace('_', ' ')}
                             </span>
-                            <span className="ml-4 text-xs text-muted-foreground">
-                              {formatCurrency(rate.rate)}
+                              <span className="text-xs text-muted-foreground">
+                                ({rate.occupancy_type === 'single' ? '1p' : rate.occupancy_type === 'double' ? '2p' : rate.occupancy_type === 'triple' ? '3p' : '4p'})
+                              </span>
+                            </div>
+                            <span className="ml-4 text-sm font-medium">
+                              {formatCurrency(rate.rate)}/night
                             </span>
                           </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Choose occupancy and board type for this booking.
-                  </p>
                   {availableRates.length === 0 && selectedListing && (
                     <div className="mt-2 p-2 bg-orange-50 dark:bg-orange-950 rounded-md border border-orange-200 dark:border-orange-800">
                       <div className="flex items-start gap-2">
@@ -735,41 +1261,131 @@ export function Bookings() {
                 </div>
               )}
 
-              {/* Second Room Selection (Optional) */}
-              {selectedListing && availableSecondListings.length > 0 && (
+              {/* Occupancy Selection - Only if multiple occupancies available */}
+              {selectedRate && availableOccupancies.length > 1 && (
                 <div className="grid gap-2">
-                  <Label htmlFor="second_listing_id">Second Room Type (Optional)</Label>
+                  <Label htmlFor="occupancy_type">Occupancy *</Label>
                   <Select
-                    value={formData.second_listing_id.toString()}
-                    onValueChange={(value) => setFormData({ 
-                      ...formData, 
-                      second_listing_id: parseInt(value),
-                      second_rate_id: 0, // Reset rate when listing changes
-                      second_quantity: 0, // Reset quantity
-                    })}
-                    disabled={availableSecondListings.length === 0}
+                    value={formData.occupancy_type}
+                    onValueChange={(value: OccupancyType) => {
+                      // Find the rate for this occupancy
+                      const occupancyRate = availableOccupancies.find(o => o.occupancy === value)?.rate
+                      if (occupancyRate) {
+                        setFormData({ 
+                          ...formData, 
+                          occupancy_type: value,
+                          rate_id: occupancyRate.id // Update to the correct rate for this occupancy
+                        })
+                      }
+                    }}
                   >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select a second room type (optional)" />
+                      <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {availableSecondListings.map((listing) => (
-                        <SelectItem key={listing.id} value={listing.id.toString()}>
-                          <div className="flex items-center justify-between w-full">
-                            <span>{listing.roomName}</span>
-                            <span className="ml-4 text-xs text-muted-foreground">
-                              {listing.purchase_type === 'inventory' 
-                                ? `${listing.available} available`
-                                : `${listing.sold} sold (flexible)`}
-                            </span>
+                      {availableOccupancies.map(({ occupancy, price }) => (
+                        <SelectItem key={occupancy} value={occupancy}>
+                          <div className="flex items-center justify-between w-full min-w-[300px]">
+                            <div>
+                              <span className="font-medium">
+                                {occupancy === 'single' && 'Single Occupancy (1 person)'}
+                                {occupancy === 'double' && 'Double Occupancy (2 people)'}
+                                {occupancy === 'triple' && 'Triple Occupancy (3 people)'}
+                                {occupancy === 'quad' && 'Quad Occupancy (4 people)'}
+                              </span>
+                            </div>
+                            <span className="ml-4 text-sm font-medium">{formatCurrency(price)}/night</span>
                           </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                   <p className="text-xs text-muted-foreground">
-                    Add a second room type to the same booking.
+                    Select the number of people sharing the room
                   </p>
+                </div>
+              )}
+
+              {/* Show selected occupancy if only one available */}
+              {selectedRate && availableOccupancies.length === 1 && (
+                <div className="p-2 bg-muted/30 rounded border">
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Occupancy:</strong> {selectedRate.occupancy_type === 'single' ? 'Single (1 person)' : selectedRate.occupancy_type === 'double' ? 'Double (2 people)' : selectedRate.occupancy_type === 'triple' ? 'Triple (3 people)' : 'Quad (4 people)'} - {formatCurrency(selectedRate.rate)}/night
+                  </p>
+                </div>
+              )}
+
+              {/* Second Room Selection (Optional) */}
+              {selectedListing && (
+                <div className="border-t pt-4 mt-4 bg-muted/20 p-3 rounded-lg">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <h3 className="text-sm font-semibold">Additional Room (Optional)</h3>
+                      <p className="text-xs text-muted-foreground">
+                        Book multiple rooms for the same customer
+                      </p>
+                      <p className="text-xs text-blue-600 mt-1">
+                        💡 Example: 3 guests = 1 Standard Double (2p) + 1 Standard Single (1p)
+                      </p>
+                    </div>
+                    {formData.second_listing_id > 0 && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setFormData({
+                          ...formData,
+                          second_listing_id: 0,
+                          second_rate_id: 0,
+                          second_quantity: 0,
+                          second_occupancy_type: 'double'
+                        })}
+                      >
+                        Remove
+                      </Button>
+                    )}
+                  </div>
+
+                <div className="grid gap-2">
+                    <Label htmlFor="second_listing_id">Room Type</Label>
+                  <Select
+                    value={formData.second_listing_id > 0 ? formData.second_listing_id.toString() : ''}
+                    onValueChange={(value) => setFormData({ 
+                      ...formData, 
+                      second_listing_id: parseInt(value),
+                      second_rate_id: 0, // Reset rate when listing changes
+                        second_quantity: 1, // Default to 1 room
+                    })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a second room type (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableSecondListings.length === 0 ? (
+                        <div className="p-2 text-sm text-muted-foreground">No listings available</div>
+                      ) : (
+                        availableSecondListings.map((listing) => (
+                        <SelectItem key={listing.id} value={listing.id.toString()}>
+                          <div className="flex flex-col">
+                          <div className="flex items-center justify-between w-full">
+                              <span className="font-medium">{listing.roomName}</span>
+                            <span className="ml-4 text-xs text-muted-foreground">
+                              {listing.purchase_type === 'inventory' 
+                                ? `${listing.available} available`
+                                : `${listing.sold} sold (flexible)`}
+                            </span>
+                            </div>
+                            {listing.contractName && (
+                              <span className="text-xs text-muted-foreground">
+                                Contract: {listing.contractName}
+                              </span>
+                            )}
+                          </div>
+                        </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                  </div>
                 </div>
               )}
 
@@ -778,8 +1394,16 @@ export function Bookings() {
                 <div className="grid gap-2">
                   <Label htmlFor="second_rate_id">Second Room Rate Plan *</Label>
                   <Select
-                    value={formData.second_rate_id.toString()}
-                    onValueChange={(value) => setFormData({ ...formData, second_rate_id: parseInt(value) })}
+                    value={formData.second_rate_id > 0 ? formData.second_rate_id.toString() : ''}
+                    onValueChange={(value) => {
+                      const rateId = parseInt(value)
+                      const selectedRate = availableSecondRates.find(r => r.id === rateId)
+                      setFormData({ 
+                        ...formData, 
+                        second_rate_id: rateId,
+                        second_occupancy_type: selectedRate?.occupancy_type || 'double'
+                      })
+                    }}
                     disabled={availableSecondRates.length === 0}
                   >
                     <SelectTrigger>
@@ -793,17 +1417,94 @@ export function Bookings() {
                       {availableSecondRates.map((rate) => (
                         <SelectItem key={rate.id} value={rate.id.toString()}>
                           <div className="flex items-center justify-between w-full">
-                            <span>
-                              {rate.occupancy_type.charAt(0).toUpperCase() + rate.occupancy_type.slice(1)} • {rate.board_type.replace('_', ' ')}
+                            <div className="flex items-center gap-2">
+                              <span className="font-medium">
+                                {BOARD_TYPE_LABELS[rate.board_type] || rate.board_type.replace('_', ' ')}
                             </span>
-                            <span className="ml-4 text-xs text-muted-foreground">
-                              {formatCurrency(rate.rate)}
+                              <span className="text-xs text-muted-foreground">
+                                ({rate.occupancy_type === 'single' ? '1p' : rate.occupancy_type === 'double' ? '2p' : rate.occupancy_type === 'triple' ? '3p' : '4p'})
+                              </span>
+                            </div>
+                            <span className="ml-4 text-sm font-medium">
+                              {formatCurrency(rate.rate)}/night
                             </span>
                           </div>
                         </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              )}
+
+              {/* Second Room Quantity */}
+              {selectedSecondListing && (
+                <div className="grid gap-2">
+                  <Label htmlFor="second_quantity">Second Room Quantity *</Label>
+                  <Input
+                    id="second_quantity"
+                    type="number"
+                    min="1"
+                    max={selectedSecondListing.purchase_type === 'inventory' ? selectedSecondListing.available : undefined}
+                    value={formData.second_quantity}
+                    onChange={(e) => setFormData({ ...formData, second_quantity: parseInt(e.target.value) || 1 })}
+                  />
+                  {selectedSecondListing && (
+                    <p className="text-xs text-muted-foreground">
+                      {selectedSecondListing.purchase_type === 'inventory' 
+                        ? `Max: ${selectedSecondListing.available} rooms`
+                        : `Flexible capacity`}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Second Room Occupancy Selection */}
+              {selectedSecondRate && availableSecondOccupancies.length > 1 && (
+                <div className="grid gap-2">
+                  <Label htmlFor="second_occupancy_type">Second Room Occupancy *</Label>
+                  <Select
+                    value={formData.second_occupancy_type}
+                    onValueChange={(value: OccupancyType) => {
+                      const occupancyRate = availableSecondOccupancies.find(o => o.occupancy === value)?.rate
+                      if (occupancyRate) {
+                        setFormData({ 
+                          ...formData, 
+                          second_occupancy_type: value,
+                          second_rate_id: occupancyRate.id
+                        })
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {availableSecondOccupancies.map(({ occupancy, price }) => (
+                        <SelectItem key={occupancy} value={occupancy}>
+                          <div className="flex items-center justify-between w-full min-w-[300px]">
+                            <div>
+                              <span className="font-medium">
+                                {occupancy === 'single' && 'Single Occupancy (1 person)'}
+                                {occupancy === 'double' && 'Double Occupancy (2 people)'}
+                                {occupancy === 'triple' && 'Triple Occupancy (3 people)'}
+                                {occupancy === 'quad' && 'Quad Occupancy (4 people)'}
+                              </span>
+                            </div>
+                            <span className="ml-4 text-sm font-medium">{formatCurrency(price)}/night</span>
+                          </div>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {/* Show selected occupancy if only one available */}
+              {selectedSecondRate && availableSecondOccupancies.length === 1 && (
+                <div className="p-2 bg-muted/30 rounded border">
+                  <p className="text-xs text-muted-foreground">
+                    <strong>Occupancy:</strong> {selectedSecondRate.occupancy_type === 'single' ? 'Single (1 person)' : selectedSecondRate.occupancy_type === 'double' ? 'Double (2 people)' : selectedSecondRate.occupancy_type === 'triple' ? 'Triple (3 people)' : 'Quad (4 people)'} - {formatCurrency(selectedSecondRate.rate)}/night
+                  </p>
                 </div>
               )}
 
@@ -977,7 +1678,7 @@ export function Bookings() {
       </div>
 
       {/* Pending Buy-to-Order Bookings Alert */}
-      {bookings.some(b => b.purchase_type === 'buy_to_order' && b.purchase_status === 'pending_purchase') && (
+      {bookings.some(b => b.rooms && b.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase')) && (
         <Card className="border-orange-500 bg-orange-50 dark:bg-orange-950">
           <CardContent className="pt-6">
             <div className="flex items-start gap-3">
@@ -992,7 +1693,7 @@ export function Bookings() {
                 </p>
                 <div className="mt-3 space-y-2">
                   {bookings
-                    .filter(b => b.purchase_type === 'buy_to_order' && b.purchase_status === 'pending_purchase')
+                    .filter(b => b.rooms && b.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase'))
                     .map(booking => (
                       <div key={booking.id} className="flex items-center justify-between bg-background/50 rounded-md p-2">
                         <div className="text-sm">
@@ -1000,7 +1701,7 @@ export function Bookings() {
                           {' - '}
                           {booking.customer_name} 
                           {' - '}
-                          {booking.quantity} × {booking.roomName}
+                          {booking.rooms.map(r => `${r.quantity}× ${r.hotelName} - ${r.roomName} (${r.occupancy_type})`).join(' + ')}
                         </div>
                         <Button
                           size="sm"
@@ -1022,9 +1723,10 @@ export function Bookings() {
       <DataTable
         title="All Bookings"
         columns={columns}
-        data={bookings}
-        onDelete={handleCancel}
+        data={bookingsTableData}
         searchable
+        onView={handleView}
+        onDelete={handleCancel}
       />
 
       {/* Purchase Details Form Dialog */}
@@ -1045,6 +1747,7 @@ export function Bookings() {
                   <CardTitle className="text-sm font-medium">Booking Summary</CardTitle>
                 </CardHeader>
                 <CardContent className="pb-3">
+                  <div className="space-y-3">
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-muted-foreground">Customer:</span>
@@ -1054,21 +1757,21 @@ export function Bookings() {
                       <span className="text-muted-foreground">Tour:</span>
                       <p className="font-medium">{selectedBookingForPurchase.tourName}</p>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Room:</span>
-                      <p className="font-medium">{selectedBookingForPurchase.roomName}</p>
+                      <div className="col-span-2">
+                        <span className="text-muted-foreground">Selling Price (Total):</span>
+                        <p className="font-medium text-green-600">{formatCurrency(selectedBookingForPurchase.total_price)}</p>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Occupancy:</span>
-                      <p className="font-medium capitalize">{selectedBookingForPurchase.occupancy_type}</p>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Quantity:</span>
-                      <p className="font-medium">{selectedBookingForPurchase.quantity} rooms</p>
+                    <div className="border-t pt-2">
+                      <p className="text-xs text-muted-foreground mb-2">Rooms to Purchase:</p>
+                      {selectedBookingForPurchase.rooms.map((room, idx) => (
+                        <div key={idx} className="text-sm flex justify-between py-1 border-b last:border-0">
+                          <span>{room.quantity}× {room.roomName} ({room.occupancy_type})</span>
+                          <Badge variant={room.purchase_status === 'pending_purchase' ? 'destructive' : 'default'} className="text-xs">
+                            {room.purchase_status}
+                          </Badge>
                     </div>
-                    <div>
-                      <span className="text-muted-foreground">Selling Price (Total):</span>
-                      <p className="font-medium text-green-600">{formatCurrency(selectedBookingForPurchase.total_price)}</p>
+                      ))}
                     </div>
                   </div>
                 </CardContent>
@@ -1155,10 +1858,7 @@ export function Bookings() {
                           {purchaseFormData.cost_per_room > 0 && (
                             <div className="text-sm space-y-1">
                               <p className="text-muted-foreground">
-                                <strong>Total Cost:</strong> {formatCurrency(purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity)}
-                              </p>
-                              <p className={purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity <= selectedBookingForPurchase.total_price ? "text-green-600 font-medium" : "text-red-600 font-medium"}>
-                                <strong>Profit Margin:</strong> {formatCurrency(selectedBookingForPurchase.total_price - (purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity))}
+                                <strong>Note:</strong> Purchase details feature being updated for new room structure
                               </p>
                             </div>
                           )}
@@ -1180,26 +1880,6 @@ export function Bookings() {
                 </Accordion>
               </div>
 
-              {purchaseFormData.cost_per_room > 0 && 
-               purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity > selectedBookingForPurchase.total_price && (
-                <Card className="border-red-500 bg-red-50 dark:bg-red-950">
-                  <CardContent className="pt-4">
-                    <div className="flex items-start gap-2">
-                      <AlertCircle className="h-5 w-5 text-red-600 mt-0.5" />
-                      <div className="text-sm">
-                        <p className="font-medium text-red-900 dark:text-red-100">
-                          Warning: Negative Margin
-                        </p>
-                        <p className="text-red-700 dark:text-red-200 mt-1">
-                          The cost from the hotel ({formatCurrency(purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity)}) 
-                          exceeds your selling price ({formatCurrency(selectedBookingForPurchase.total_price)}). 
-                          You will lose {formatCurrency((purchaseFormData.cost_per_room * selectedBookingForPurchase.quantity) - selectedBookingForPurchase.total_price)} on this booking.
-                        </p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
             </>
           )}
 
@@ -1213,7 +1893,205 @@ export function Bookings() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* View Booking Dialog */}
+      <Dialog open={isViewOpen} onOpenChange={setIsViewOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Booking Details - #{viewingBooking?.id}</DialogTitle>
+            <DialogDescription>
+              Complete booking information and cost breakdown
+            </DialogDescription>
+          </DialogHeader>
+
+          {viewingBooking && (
+            <div className="space-y-4">
+              {/* Customer & Tour Info */}
+              <div className="grid grid-cols-2 gap-4">
+                <Card>
+                  <CardHeader className="py-3">
+                    <CardTitle className="text-sm font-medium">Customer Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="pb-3 space-y-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Name:</span>
+                      <p className="font-medium">{viewingBooking.customer_name}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Email:</span>
+                      <p className="font-medium">{viewingBooking.customer_email}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                <Card>
+                  <CardHeader className="py-3">
+                    <CardTitle className="text-sm font-medium">Booking Information</CardTitle>
+                  </CardHeader>
+                  <CardContent className="pb-3 space-y-2 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Status:</span>
+                      <p><Badge variant={viewingBooking.status === 'confirmed' ? 'default' : viewingBooking.status === 'cancelled' ? 'destructive' : 'secondary'}>{viewingBooking.status}</Badge></p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Total Rooms:</span>
+                      <p className="font-medium">{viewingBooking.rooms.reduce((sum, r) => sum + r.quantity, 0)}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Total Guests:</span>
+                      <p className="font-medium">
+                        {viewingBooking.rooms.reduce((sum, r) => {
+                          const people = r.occupancy_type === 'single' ? 1 : r.occupancy_type === 'double' ? 2 : r.occupancy_type === 'triple' ? 3 : 4
+                          return sum + (people * r.quantity)
+                        }, 0)} people
+                      </p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Booking Date:</span>
+                      <p className="font-medium">{viewingBooking.booking_date}</p>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Stay Details */}
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm font-medium">Stay Details</CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3">
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Tour:</span>
+                      <p className="font-medium">{viewingBooking.tourName}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Check-in:</span>
+                      <p className="font-medium">{viewingBooking.check_in_date}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Check-out:</span>
+                      <p className="font-medium">{viewingBooking.check_out_date}</p>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Nights:</span>
+                      <p className="font-medium">{viewingBooking.nights}</p>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Rooms */}
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm font-medium">Rooms ({viewingBooking.rooms.length})</CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3">
+                  <div className="space-y-3">
+                    {viewingBooking.rooms.map((room, idx) => (
+                      <div key={idx} className="p-3 border rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-primary">{room.hotelName}</span>
+                            <span className="text-muted-foreground">→</span>
+                            <span className="font-medium">{room.roomName}</span>
+                            <Badge variant="secondary" className="text-xs">
+                              {room.occupancy_type === 'single' ? '1p' : room.occupancy_type === 'double' ? '2p' : room.occupancy_type === 'triple' ? '3p' : '4p'}
+                            </Badge>
+                            <Badge variant="outline" className="text-xs">
+                              {BOARD_TYPE_LABELS[room.board_type]}
+                            </Badge>
+                          </div>
+                          <span className="font-semibold">{formatCurrency(room.total_price)}</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
+                          <div>Contract: {room.contractName}</div>
+                          <div>Quantity: {room.quantity} room{room.quantity > 1 ? 's' : ''}</div>
+                          <div>Type: <Badge variant={room.purchase_type === 'inventory' ? 'default' : 'secondary'} className="text-xs">{room.purchase_type}</Badge></div>
+                          <div>Per Room: {formatCurrency(room.price_per_room)}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Pricing */}
+              <Card>
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm font-medium">Pricing Summary</CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3">
+                  <div className="space-y-2">
+                    {viewingBooking.rooms.map((room, idx) => (
+                      <div key={idx} className="flex justify-between text-sm border-b pb-2 last:border-0">
+                        <span className="text-muted-foreground">
+                          {room.quantity}× {room.roomName} ({room.occupancy_type})
+                        </span>
+                        <span className="font-medium">{formatCurrency(room.total_price)}</span>
+                      </div>
+                    ))}
+                    <div className="flex justify-between text-lg font-bold pt-2 border-t">
+                      <span>Total Price:</span>
+                      <span className="text-primary">{formatCurrency(viewingBooking.total_price)}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {/* Purchase Details (if buy-to-order) */}
+              {viewingBooking.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_order) && (
+                <Card className="border-orange-200">
+                  <CardHeader className="py-3">
+                    <CardTitle className="text-sm font-medium">Purchase Details</CardTitle>
+                  </CardHeader>
+                  <CardContent className="pb-3">
+                    <div className="space-y-3">
+                      {viewingBooking.rooms
+                        .filter(r => r.purchase_type === 'buy_to_order' && r.purchase_order)
+                        .map((room, idx) => (
+                          <div key={idx} className="p-3 border rounded">
+                            <div className="font-medium mb-2">{room.roomName} ({room.occupancy_type})</div>
+                            <div className="grid grid-cols-2 gap-3 text-sm">
+                              <div>
+                                <span className="text-muted-foreground">Purchased By:</span>
+                                <p className="font-medium">{room.purchase_order?.assigned_to || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Hotel Contact:</span>
+                                <p className="font-medium">{room.purchase_order?.hotel_contact || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Confirmation #:</span>
+                                <p className="font-medium">{room.purchase_order?.hotel_confirmation || 'N/A'}</p>
+                              </div>
+                              <div>
+                                <span className="text-muted-foreground">Cost Per Room:</span>
+                                <p className="font-medium">{room.purchase_order?.cost_per_room ? formatCurrency(room.purchase_order.cost_per_room) : 'N/A'}</p>
+                              </div>
+                              {room.purchase_order?.notes && (
+                                <div className="col-span-2">
+                                  <span className="text-muted-foreground">Notes:</span>
+                                  <p className="font-medium text-xs">{room.purchase_order.notes}</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button onClick={() => setIsViewOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
+
 

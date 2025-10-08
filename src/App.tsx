@@ -11,6 +11,7 @@ import { Rates } from '@/pages/rates'
 import { InventorySetup } from '@/pages/inventory-setup'
 import { Listings } from '@/pages/listings'
 import { Bookings } from '@/pages/bookings'
+import { BookingsNew } from '@/pages/bookings-new'
 import { Reports } from '@/pages/reports'
 
 function App() {
@@ -28,6 +29,7 @@ function App() {
               <Route path="inventory" element={<InventorySetup />} />
               <Route path="listings" element={<Listings />} />
               <Route path="bookings" element={<Bookings />} />
+              <Route path="bookings-new" element={<BookingsNew />} />
               <Route path="reports" element={<Reports />} />
             </Route>
           </Routes>

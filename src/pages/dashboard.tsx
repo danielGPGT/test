@@ -20,32 +20,34 @@ export function Dashboard() {
     // Total inventory value (cost)
     const totalInventoryCost = listings
       .filter(l => l.purchase_type === 'inventory')
-      .reduce((sum, l) => sum + (l.cost_price * l.quantity), 0)
+      .reduce((sum, l) => sum + ((l.cost_price || 0) * (l.quantity || 0)), 0)
 
     // Potential revenue from all unsold inventory
     const potentialRevenue = listings
-      .reduce((sum, l) => sum + (l.selling_price * (l.quantity - l.sold)), 0)
+      .reduce((sum, l) => sum + ((l.selling_price || 0) * ((l.quantity || 0) - (l.sold || 0))), 0)
 
     // Actual profit from sold rooms
     const actualProfit = listings
-      .reduce((sum, l) => sum + ((l.selling_price - l.cost_price) * l.sold), 0)
+      .reduce((sum, l) => sum + (((l.selling_price || 0) - (l.cost_price || 0)) * (l.sold || 0)), 0)
 
     // Average margin across all listings
     const avgMargin = listings.length > 0
       ? listings.reduce((sum, l) => {
-          const margin = ((l.selling_price - l.cost_price) / l.selling_price) * 100
+          const sellingPrice = l.selling_price || 0
+          const costPrice = l.cost_price || 0
+          const margin = sellingPrice > 0 ? ((sellingPrice - costPrice) / sellingPrice) * 100 : 0
           return sum + margin
         }, 0) / listings.length
       : 0
 
     // Inventory utilization
-    const totalAllocated = listings.reduce((sum, l) => sum + l.quantity, 0)
-    const totalSold = listings.reduce((sum, l) => sum + l.sold, 0)
+    const totalAllocated = listings.reduce((sum, l) => sum + (l.quantity || 0), 0)
+    const totalSold = listings.reduce((sum, l) => sum + (l.sold || 0), 0)
     const utilization = totalAllocated > 0 ? (totalSold / totalAllocated) * 100 : 0
 
-    // Pending purchases count
+    // Pending purchases count - check for buy_to_order rooms in bookings
     const pendingPurchases = bookings.filter(b => 
-      b.purchase_type === 'buy_to_order' && b.purchase_status === 'pending_purchase'
+      b.status === 'pending' && b.rooms.some(r => r.purchase_type === 'buy_to_order')
     ).length
 
     return {
@@ -66,9 +68,9 @@ export function Dashboard() {
     return [...listings]
       .map(l => ({
         ...l,
-        revenue: l.selling_price * l.sold,
-        profit: (l.selling_price - l.cost_price) * l.sold,
-        utilization: l.quantity > 0 ? (l.sold / l.quantity) * 100 : 0
+        revenue: (l.selling_price || 0) * (l.sold || 0),
+        profit: ((l.selling_price || 0) - (l.cost_price || 0)) * (l.sold || 0),
+        utilization: (l.quantity || 0) > 0 ? ((l.sold || 0) / (l.quantity || 0)) * 100 : 0
       }))
       .sort((a, b) => b.profit - a.profit)
       .slice(0, 5)
@@ -170,7 +172,7 @@ export function Dashboard() {
                     <div>
                       <p className="text-sm font-medium">{listing.tourName}</p>
                       <p className="text-xs text-muted-foreground">
-                        {listing.roomName} - {listing.occupancy_type}
+                        {listing.roomName}
                       </p>
                     </div>
                   </div>
@@ -231,12 +233,12 @@ export function Dashboard() {
             </div>
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Board Types Offered:</span>
-                <Badge variant="outline">{new Set(listings.map(l => l.board_type)).size}</Badge>
+                <span className="text-sm text-muted-foreground">Total Rooms Available:</span>
+                <Badge variant="outline">{listings.length} listings</Badge>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted-foreground">Hotels in System:</span>
-                <Badge variant="outline">{listings.filter(l => l.purchase_type === 'inventory').reduce((sum, l) => sum + l.quantity, 0)} rooms</Badge>
+                <span className="text-sm text-muted-foreground">Inventory Rooms:</span>
+                <Badge variant="outline">{listings.filter(l => l.purchase_type === 'inventory').reduce((sum, l) => sum + (l.quantity || 0), 0)} rooms</Badge>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-sm text-muted-foreground">Average Profit Margin:</span>

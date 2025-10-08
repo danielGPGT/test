@@ -8,7 +8,8 @@ import {
   Warehouse,
   List,
   ShoppingCart,
-  BarChart 
+  BarChart,
+  ShoppingBag
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +22,7 @@ const iconMap = {
   warehouse: Warehouse,
   list: List,
   'shopping-cart': ShoppingCart,
+  'shopping-bag': ShoppingBag,
   'bar-chart': BarChart,
 }
 
@@ -38,7 +40,8 @@ const navItems: NavItem[] = [
   { title: "Rates", icon: "dollar-sign", route: "/rates" },
   { title: "Inventory Setup", icon: "warehouse", route: "/inventory" },
   { title: "Listings", icon: "list", route: "/listings" },
-  { title: "Bookings", icon: "shopping-cart", route: "/bookings" },
+  { title: "Bookings (Old)", icon: "shopping-cart", route: "/bookings" },
+  { title: "Bookings (New)", icon: "shopping-bag", route: "/bookings-new" },
   { title: "Reports", icon: "bar-chart", route: "/reports" }
 ]
 

@@ -379,7 +379,7 @@ export function Contracts() {
                         </p>
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="supplier_commission">Supplier Commission (%)</Label>
+                        <Label htmlFor="supplier_commission">Supplier Commission / Discount (%)</Label>
                         <Input
                           id="supplier_commission"
                           type="number"
@@ -389,7 +389,7 @@ export function Contracts() {
                           placeholder="e.g., 15 for 15%"
                         />
                         <p className="text-xs text-muted-foreground">
-                          Commission charged by hotel/supplier
+                          Commission/discount you receive from hotel (reduces your cost)
                         </p>
                       </div>
                     </div>
@@ -1105,7 +1105,7 @@ export function Contracts() {
               />
             </div>
             <div className="grid gap-2">
-              <Label htmlFor="edit-supplier_commission">Supplier Commission (%)</Label>
+              <Label htmlFor="edit-supplier_commission">Supplier Commission / Discount (%)</Label>
               <Input
                 id="edit-supplier_commission"
                 type="number"
@@ -1113,6 +1113,9 @@ export function Contracts() {
                 value={formData.supplier_commission_rate}
                 onChange={(e) => setFormData({ ...formData, supplier_commission_rate: parseFloat(e.target.value) })}
               />
+              <p className="text-xs text-muted-foreground">
+                Commission/discount you receive from hotel (reduces your cost)
+              </p>
             </div>
             <div className="grid gap-2">
               <Label>Days of Week (MTWTFSS)</Label>

@@ -1,4 +1,4 @@
-import { Contract, OccupancyType } from '@/contexts/data-context'
+import { Contract, OccupancyType, Rate } from '@/contexts/data-context'
 
 export interface PriceBreakdown {
   baseRate: number
@@ -14,29 +14,43 @@ export function calculatePriceBreakdown(
   baseRate: number,
   contract: Contract,
   occupancy: OccupancyType,
-  nights: number = 1
+  nights: number = 1,
+  boardCost: number = 0,
+  rate?: Rate // Optional rate object for rate-level overrides
 ): PriceBreakdown {
   // Determine number of people based on occupancy
   const people = occupancy === 'single' ? 1 : occupancy === 'double' ? 2 : occupancy === 'triple' ? 3 : 4
 
+  // Use rate-level costs if provided, otherwise fall back to contract
+  const taxRate = rate?.tax_rate !== undefined ? rate.tax_rate : (contract.tax_rate || 0)
+  const cityTaxPerPerson = rate?.city_tax_per_person_per_night !== undefined ? rate.city_tax_per_person_per_night : (contract.city_tax_per_person_per_night || 0)
+  const resortFeePerNight = rate?.resort_fee_per_night !== undefined ? rate.resort_fee_per_night : (contract.resort_fee_per_night || 0)
+  const commissionRate = rate?.supplier_commission_rate !== undefined ? rate.supplier_commission_rate : (contract.supplier_commission_rate || 0)
+
   // Base calculations
-  const cityTax = (contract.city_tax_per_person_per_night || 0) * people * nights
-  const resortFee = (contract.resort_fee_per_night || 0) * nights
+  const cityTax = cityTaxPerPerson * people * nights
+  const resortFee = resortFeePerNight * nights
   
-  // Subtotal before VAT
-  const subtotal = baseRate + resortFee
+  // Supplier commission (discount you receive from hotel) - applied to base rate only
+  const supplierCommission = baseRate * commissionRate
+  
+  // Net rate after commission (commission only applies to base rate, not board costs)
+  const netRate = baseRate - supplierCommission
+  
+  // Add board cost (no commission on board costs)
+  const totalNetRate = netRate + boardCost
+  
+  // Subtotal before VAT (net rate + board cost + resort fee)
+  const subtotal = totalNetRate + resortFee
   
   // VAT on subtotal (city tax usually not included in VAT base)
-  const vat = subtotal * (contract.tax_rate || 0)
-  
-  // Supplier commission on base rate
-  const supplierCommission = baseRate * (contract.supplier_commission_rate || 0)
+  const vat = subtotal * taxRate
   
   // Total cost to you
-  const totalCost = subtotal + vat + cityTax + supplierCommission
+  const totalCost = subtotal + vat + cityTax
 
   return {
-    baseRate,
+    baseRate: baseRate + boardCost, // Show total rate in breakdown
     cityTax,
     resortFee,
     vat,
@@ -84,4 +98,5 @@ export const BOARD_TYPE_DESCRIPTIONS: Record<string, string> = {
   full_board: 'All meals (B, L, D)',
   all_inclusive: 'All meals + drinks'
 }
+
 

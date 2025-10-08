@@ -1,7 +1,6 @@
-import { useState, useEffect, useMemo } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { DataTable } from '@/components/ui/data-table'
-import { Button } from '@/components/ui/button'
+import { useState, useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
@@ -10,202 +9,269 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
-import { Badge } from '@/components/ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { useData, Rate, OccupancyType, BoardType } from '@/contexts/data-context'
-import { Plus, Info, ShoppingBag, Pencil, Trash2 } from 'lucide-react'
-import { BOARD_TYPE_LABELS, calculatePriceBreakdown } from '@/lib/pricing'
-import { toast } from 'sonner'
-import { formatCurrency } from '@/lib/utils'
+} from "@/components/ui/select";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useData, Rate, BoardType } from "@/contexts/data-context";
+import { Plus, Info, ShoppingBag, Pencil, Trash2 } from "lucide-react";
+import { BOARD_TYPE_LABELS, calculatePriceBreakdown } from "@/lib/pricing";
+import { toast } from "sonner";
+import { formatCurrency } from "@/lib/utils";
+// import { Checkbox } from '@/components/ui/checkbox'
 
 export function Rates() {
-  const navigate = useNavigate()
-  const { rates, contracts, hotels, addRate, updateRate, deleteRate } = useData()
-  const [isCreateOpen, setIsCreateOpen] = useState(false)
-  const [isEditOpen, setIsEditOpen] = useState(false)
-  const [editingRate, setEditingRate] = useState<Rate | null>(null)
+  const navigate = useNavigate();
+  const { rates, contracts, hotels, addRate, updateRate, deleteRate } =
+    useData();
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editingRate, setEditingRate] = useState<Rate | null>(null);
   const [formData, setFormData] = useState({
     contract_id: 0,
-    room_group_id: '',
-    occupancy_type: 'double' as OccupancyType,
-    board_type: 'bed_breakfast' as BoardType,
-    rate: 0,
-  })
+    room_group_id: "",
+    board_type: "bed_breakfast" as BoardType,
+    rate: 0, // Double occupancy rate (default)
+    single_supplement: 0, // Optional: reduction for single use (1 person in double room)
+    offer_single_rate: false,
+    triple_rate: 0, // Optional: rate for triple occupancy (3 people)
+    offer_triple_rate: false,
+  });
 
   // Get selected contract details
-  const selectedContract = useMemo(() => 
-    contracts.find(c => c.id === formData.contract_id),
+  const selectedContract = useMemo(
+    () => contracts.find((c) => c.id === formData.contract_id),
     [contracts, formData.contract_id]
-  )
+  );
 
   // Get room groups from selected contract's hotel
   const availableRoomGroups = useMemo(() => {
-    if (!selectedContract) return []
-    const hotel = hotels.find(h => h.id === selectedContract.hotel_id)
-    return hotel?.room_groups || []
-  }, [selectedContract, hotels])
+    if (!selectedContract) return [];
+    const hotel = hotels.find((h) => h.id === selectedContract.hotel_id);
+    return hotel?.room_groups || [];
+  }, [selectedContract, hotels]);
+
+  // Get selected room group for capacity validation
+  const selectedRoomGroup = useMemo(() => {
+    if (!selectedContract || !formData.room_group_id) return null;
+    const hotel = hotels.find((h) => h.id === selectedContract.hotel_id);
+    return hotel?.room_groups.find((rg) => rg.id === formData.room_group_id);
+  }, [selectedContract, formData.room_group_id, hotels]);
 
   // Auto-populate contract defaults when contract is selected
   useEffect(() => {
     if (selectedContract && formData.rate === 0) {
-      setFormData(prev => ({
+      setFormData((prev) => ({
         ...prev,
         rate: selectedContract.base_rate,
-      }))
+      }));
     }
-  }, [selectedContract, formData.rate])
+  }, [selectedContract, formData.rate]);
 
   // Calculate full cost for each rate
-  const ratesWithFullCost = useMemo(() => 
-    rates.map(rate => {
-      const contract = contracts.find(c => c.id === rate.contract_id)
-      if (!contract) return { ...rate, fullCost: rate.rate }
-      
-      const breakdown = calculatePriceBreakdown(
-        rate.rate,
-        contract,
-        rate.occupancy_type,
-        1
-      )
-      
-      return {
-        ...rate,
-        fullCost: breakdown.totalCost
-      }
-    }),
+  const ratesWithFullCost = useMemo(
+    () =>
+      rates.map((rate) => {
+        const contract = contracts.find((c) => c.id === rate.contract_id);
+        if (!contract) return { ...rate, fullCost: rate.rate };
+
+        // Determine board cost from contract and board_type
+        const boardOption = contract.board_options?.find(
+          (o) => o.board_type === rate.board_type
+        );
+        const boardCost = boardOption?.additional_cost || 0;
+
+        // Saved rate is total (base + board). Extract base portion
+        const basePortion = Math.max(0, rate.rate - boardCost);
+
+        const breakdown = calculatePriceBreakdown(
+          basePortion,
+          contract,
+          "double",
+          1,
+          boardCost
+        );
+
+        return {
+          ...rate,
+          fullCost: breakdown.totalCost,
+        };
+      }),
     [rates, contracts]
-  )
+  );
 
   const handleCreateListingFromRate = (rate: Rate & { fullCost: number }) => {
-    const contract = contracts.find(c => c.id === rate.contract_id)
+    const contract = contracts.find((c) => c.id === rate.contract_id);
     if (!contract) {
-      toast.error('Contract not found')
-      return
+      toast.error("Contract not found");
+      return;
     }
-    
-    // Store rate data in sessionStorage to pre-fill listing form
-    sessionStorage.setItem('prefillListingFromRate', JSON.stringify({
-      contract_id: rate.contract_id,
-      room_group_id: rate.room_group_id,
-      occupancy_type: rate.occupancy_type,
-      board_type: rate.board_type,
-      cost_price: rate.fullCost,
-      purchase_type: 'inventory',
-      // Pass contract details for validation
-      max_quantity: contract.total_rooms
-    }))
-    toast.success('Opening listings page with pre-filled data')
-    navigate('/listings')
-  }
 
-  const columns = [
-    { header: 'ID', accessor: 'id', width: 60 },
-    { header: 'Contract', accessor: 'contractName' },
-    { header: 'Room Type', accessor: 'roomName' },
-    { 
-      header: 'Occupancy', 
-      accessor: 'occupancy_type',
-      format: 'badge' as const,
-    },
-    { 
-      header: 'Board', 
-      accessor: 'board_type',
-      format: 'badge' as const,
-    },
-    { header: 'Base Rate', accessor: 'rate', format: 'currency' as const },
-    { header: 'Full Cost', accessor: 'fullCost', format: 'currency' as const },
-    { header: 'Actions', accessor: 'actions', type: 'actions' as const, actions: ['view', 'edit', 'delete'] },
-  ]
+    // Store rate data in sessionStorage to pre-fill listing form
+    sessionStorage.setItem(
+      "prefillListingFromRate",
+      JSON.stringify({
+        contract_id: rate.contract_id,
+        room_group_id: rate.room_group_id,
+        occupancy_type: rate.occupancy_type,
+        board_type: rate.board_type,
+        cost_price: rate.fullCost,
+        purchase_type: "inventory",
+        // Pass contract details for validation
+        max_quantity: contract.total_rooms,
+      })
+    );
+    toast.success("Opening listings page with pre-filled data");
+    navigate("/listings");
+  };
 
   const handleCreate = () => {
     // Validation
     if (formData.contract_id === 0) {
-      toast.error('Please select a contract')
-      return
+      toast.error("Please select a contract");
+      return;
     }
     if (!formData.room_group_id) {
-      toast.error('Please select a room type')
-      return
+      toast.error("Please select a room type");
+      return;
     }
     if (formData.rate <= 0) {
-      toast.error('Please enter a valid rate')
-      return
+      toast.error("Please enter a valid double occupancy rate");
+      return;
     }
-    
-    addRate(formData)
-    toast.success('Rate created successfully')
-    setIsCreateOpen(false)
+
+    // Validate triple capacity if triple rate is selected
+    if (
+      formData.offer_triple_rate &&
+      selectedRoomGroup &&
+      selectedRoomGroup.capacity < 3
+    ) {
+      const proceed = confirm(
+        `⚠️ Warning: Triple occupancy selected but room capacity is only ${selectedRoomGroup.capacity} people.\n\nDo you want to proceed anyway?`
+      );
+      if (!proceed) return;
+    }
+
+    // Create single MVP rate (assumed double occupancy)
+    // Calculate total rate including board cost
+    const boardOption = selectedContract?.board_options?.find(
+      (o) => o.board_type === formData.board_type
+    );
+    const totalRate = formData.rate + (boardOption?.additional_cost || 0);
+
+    addRate({
+      contract_id: formData.contract_id,
+      room_group_id: formData.room_group_id,
+      occupancy_type: "double",
+      board_type: formData.board_type,
+      rate: totalRate,
+    });
+    toast.success("Rate created successfully");
+
+    setIsCreateOpen(false);
     setFormData({
       contract_id: 0,
-      room_group_id: '',
-      occupancy_type: 'double',
-      board_type: 'bed_breakfast',
+      room_group_id: "",
+      board_type: "bed_breakfast",
       rate: 0,
-    })
-  }
+      single_supplement: 0,
+      offer_single_rate: false,
+      triple_rate: 0,
+      offer_triple_rate: false,
+    });
+  };
 
   const handleEdit = (rate: Rate) => {
-    setEditingRate(rate)
+    setEditingRate(rate);
+
+    // Calculate base rate by subtracting board cost
+    const contract = contracts.find((c) => c.id === rate.contract_id);
+    const boardOption = contract?.board_options?.find(
+      (o) => o.board_type === rate.board_type
+    );
+    const baseRate = rate.rate - (boardOption?.additional_cost || 0);
+
     setFormData({
       contract_id: rate.contract_id,
       room_group_id: rate.room_group_id,
-      occupancy_type: rate.occupancy_type,
       board_type: rate.board_type,
-      rate: rate.rate,
-    })
-    setIsEditOpen(true)
-  }
+      rate: baseRate,
+      single_supplement: 0,
+      offer_single_rate: false,
+      triple_rate: 0,
+      offer_triple_rate: false,
+    });
+    setIsEditOpen(true);
+  };
 
   const handleUpdate = () => {
-    if (!editingRate) return
-    
+    if (!editingRate) return;
+
     // Validation
     if (formData.contract_id === 0) {
-      toast.error('Please select a contract')
-      return
+      toast.error("Please select a contract");
+      return;
     }
     if (!formData.room_group_id) {
-      toast.error('Please select a room type')
-      return
+      toast.error("Please select a room type");
+      return;
     }
     if (formData.rate <= 0) {
-      toast.error('Please enter a valid rate')
-      return
+      toast.error("Please enter a valid rate");
+      return;
     }
-    
-    updateRate(editingRate.id, formData)
-    toast.success('Rate updated successfully')
-    setIsEditOpen(false)
-    setEditingRate(null)
+
+    // Calculate total rate including board cost
+    const boardOption = selectedContract?.board_options?.find(
+      (o) => o.board_type === formData.board_type
+    );
+    const totalRate = formData.rate + (boardOption?.additional_cost || 0);
+
+    updateRate(editingRate.id, {
+      contract_id: formData.contract_id,
+      room_group_id: formData.room_group_id,
+      occupancy_type: editingRate.occupancy_type, // Keep existing occupancy
+      board_type: formData.board_type,
+      rate: totalRate,
+    });
+    toast.success("Rate updated successfully");
+    setIsEditOpen(false);
+    setEditingRate(null);
     setFormData({
       contract_id: 0,
-      room_group_id: '',
-      occupancy_type: 'double',
-      board_type: 'bed_breakfast',
+      room_group_id: "",
+      board_type: "bed_breakfast",
       rate: 0,
-    })
-  }
+      single_supplement: 0,
+      offer_single_rate: false,
+      triple_rate: 0,
+      offer_triple_rate: false,
+    });
+  };
 
   const handleDelete = (rate: Rate) => {
     if (confirm(`Are you sure you want to delete this rate?`)) {
-      deleteRate(rate.id)
+      deleteRate(rate.id);
     }
-  }
+  };
 
   return (
     <div className="space-y-4">
       <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold">Rates</h1>
+        <div>
+          <h1 className="text-3xl font-bold">Rates</h1>
+          <p className="text-muted-foreground mt-1">
+            Room rates per night. Occupancy assumed as double (MVP).
+          </p>
+        </div>
         <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -213,254 +279,337 @@ export function Rates() {
               New Rate
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Create Rate</DialogTitle>
-              <DialogDescription>
-                Define occupancy-specific rates for rooms under a contract.
-              </DialogDescription>
-            </DialogHeader>
-            
-            {selectedContract && (
-              <Card className="bg-muted/50">
+        </Dialog>
+      </div>
+
+      {/* New Rate Dialog Content */}
+      <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Create Rate</DialogTitle>
+            <DialogDescription>
+              Create a room rate per night. Occupancy is assumed as double for
+              MVP.
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedContract && (
+            <Card className="bg-muted/50">
+              <CardHeader className="py-3">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <Info className="h-4 w-4" />
+                  Contract Information
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pb-3">
+                <div className="grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <span className="text-muted-foreground">Hotel:</span>
+                    <p className="font-medium">{selectedContract.hotelName}</p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Base Rate:</span>
+                    <p className="font-medium">
+                      {selectedContract.base_rate} {selectedContract.currency}
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Tax Rate:</span>
+                    <p className="font-medium">
+                      {((selectedContract.tax_rate || 0) * 100).toFixed(2)}%
+                    </p>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Period:</span>
+                    <p className="font-medium">
+                      {selectedContract.start_date} to{" "}
+                      {selectedContract.end_date}
+                    </p>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="contract_id">Contract *</Label>
+              <Select
+                value={formData.contract_id.toString()}
+                onValueChange={(value) => {
+                  const contractId = parseInt(value);
+                  setFormData({
+                    ...formData,
+                    contract_id: contractId,
+                    room_group_id: "",
+                  });
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select a contract" />
+                </SelectTrigger>
+                <SelectContent>
+                  {contracts.map((contract) => (
+                    <SelectItem
+                      key={contract.id}
+                      value={contract.id.toString()}
+                    >
+                      {contract.contract_name} - {contract.hotelName}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="room_group_id">Room Type *</Label>
+              <Select
+                value={formData.room_group_id}
+                onValueChange={(value) =>
+                  setFormData({ ...formData, room_group_id: value })
+                }
+                disabled={!selectedContract}
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={
+                      selectedContract
+                        ? "Select a room type"
+                        : "Select a contract first"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {availableRoomGroups.map((roomGroup) => (
+                    <SelectItem key={roomGroup.id} value={roomGroup.id}>
+                      {roomGroup.room_type} (Capacity: {roomGroup.capacity})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="board_type">Board/Meal Plan *</Label>
+              <Select
+                value={formData.board_type}
+                onValueChange={(value: BoardType) => {
+                  setFormData({ ...formData, board_type: value });
+                }}
+                disabled={
+                  !selectedContract ||
+                  !selectedContract.board_options ||
+                  selectedContract.board_options.length === 0
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue
+                    placeholder={
+                      selectedContract?.board_options &&
+                      selectedContract.board_options.length > 0
+                        ? "Select a board type"
+                        : "No board options in contract"
+                    }
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {selectedContract?.board_options?.map((option) => (
+                    <SelectItem
+                      key={option.board_type}
+                      value={option.board_type}
+                    >
+                      {BOARD_TYPE_LABELS[option.board_type]}
+                      {option.additional_cost > 0 &&
+                        ` (+${option.additional_cost} ${selectedContract.currency})`}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedContract &&
+              selectedContract.board_options &&
+              selectedContract.board_options.length > 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Contract base rate: {selectedContract.base_rate}{" "}
+                  {selectedContract.currency}. Adjust the rate below to include
+                  board costs.
+                </p>
+              ) : (
+                <p className="text-xs text-orange-600">
+                  Please add board options to the contract first
+                </p>
+              )}
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="rate">
+                Base Room Rate per Night (
+                {selectedContract?.currency || "Currency"}) *
+              </Label>
+              <Input
+                id="rate"
+                type="number"
+                step="0.01"
+                value={formData.rate}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    rate: parseFloat(e.target.value) || 0,
+                  })
+                }
+                placeholder="Base room rate (before board costs)"
+              />
+              {selectedContract && (
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <p>
+                    Contract base rate: {selectedContract.base_rate}{" "}
+                    {selectedContract.currency}
+                  </p>
+                  {(() => {
+                    const boardOption = selectedContract.board_options?.find(
+                      (o) => o.board_type === formData.board_type
+                    );
+                    const totalRate =
+                      formData.rate + (boardOption?.additional_cost || 0);
+                    return (
+                      <p className="font-medium text-blue-600">
+                        Total rate with {BOARD_TYPE_LABELS[formData.board_type]}
+                        : {formatCurrency(totalRate)}{" "}
+                        {selectedContract.currency}
+                        {boardOption &&
+                          boardOption.additional_cost > 0 &&
+                          ` (+${boardOption.additional_cost} board cost)`}
+                      </p>
+                    );
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* Occupancy options removed for MVP */}
+
+            {/* Cost Breakdown Preview */}
+            {selectedContract && formData.rate > 0 && (
+              <Card className="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
                 <CardHeader className="py-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
-                    <Info className="h-4 w-4" />
-                    Contract Information
+                    <Info className="h-4 w-4 text-blue-600" />
+                    Full Cost Breakdown (per night, double occupancy)
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pb-3">
-                  <div className="grid grid-cols-2 gap-2 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Hotel:</span>
-                      <p className="font-medium">{selectedContract.hotelName}</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Base Rate:</span>
-                      <p className="font-medium">{selectedContract.base_rate} {selectedContract.currency}</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Tax Rate:</span>
-                      <p className="font-medium">{((selectedContract.tax_rate || 0) * 100).toFixed(2)}%</p>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Period:</span>
-                      <p className="font-medium">{selectedContract.start_date} to {selectedContract.end_date}</p>
-                    </div>
-                  </div>
+                  {(() => {
+                    // Calculate board cost
+                    const boardOption = selectedContract.board_options?.find(
+                      (o) => o.board_type === formData.board_type
+                    );
+                    const boardCost = boardOption?.additional_cost || 0;
+
+                    const breakdown = calculatePriceBreakdown(
+                      formData.rate, // Base rate only
+                      selectedContract,
+                      "double",
+                      1,
+                      boardCost // Board cost passed separately
+                    );
+                    return (
+                      <div className="space-y-2 text-sm">
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">
+                            Base Room Rate:
+                          </span>
+                          <span>{formatCurrency(formData.rate)}</span>
+                        </div>
+
+                        {breakdown.supplierCommission > 0 && (
+                          <div className="flex justify-between text-green-600">
+                            <span className="text-muted-foreground">
+                              Supplier Commission (your discount):
+                            </span>
+                            <span>
+                              -{formatCurrency(breakdown.supplierCommission)}
+                            </span>
+                          </div>
+                        )}
+                        {boardOption && boardOption.additional_cost > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              {BOARD_TYPE_LABELS[formData.board_type]} Cost:
+                            </span>
+                            <span>
+                              +{formatCurrency(boardOption.additional_cost)}
+                            </span>
+                          </div>
+                        )}
+                        {breakdown.resortFee > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              Resort Fee:
+                            </span>
+                            <span>+{formatCurrency(breakdown.resortFee)}</span>
+                          </div>
+                        )}
+                        {breakdown.vat > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              VAT (
+                              {(selectedContract.tax_rate! * 100).toFixed(0)}%):
+                            </span>
+                            <span>+{formatCurrency(breakdown.vat)}</span>
+                          </div>
+                        )}
+                        {breakdown.cityTax > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              City Tax (2 people):
+                            </span>
+                            <span>+{formatCurrency(breakdown.cityTax)}</span>
+                          </div>
+                        )}
+                        <div className="border-t pt-2 flex justify-between font-semibold">
+                          <span>Total Cost Price:</span>
+                          <span className="text-blue-600 dark:text-blue-400">
+                            {formatCurrency(breakdown.totalCost)}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground pt-1">
+                          This is your cost for 2 people sharing
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               </Card>
             )}
+          </div>
 
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Label htmlFor="contract_id">Contract *</Label>
-                <Select
-                  value={formData.contract_id.toString()}
-                  onValueChange={(value) => {
-                    const contractId = parseInt(value)
-                  setFormData({ 
-                    ...formData, 
-                    contract_id: contractId,
-                    room_group_id: '', // Reset room when contract changes
-                  })
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select a contract" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {contracts.map((contract) => (
-                      <SelectItem key={contract.id} value={contract.id.toString()}>
-                        {contract.contract_name} - {contract.hotelName}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              
-              <div className="grid gap-2">
-                <Label htmlFor="room_group_id">Room Type *</Label>
-                <Select
-                  value={formData.room_group_id}
-                  onValueChange={(value) => setFormData({ ...formData, room_group_id: value })}
-                  disabled={!selectedContract}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={
-                      selectedContract 
-                        ? "Select a room type" 
-                        : "Select a contract first"
-                    } />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableRoomGroups.map((roomGroup) => (
-                      <SelectItem key={roomGroup.id} value={roomGroup.id}>
-                        {roomGroup.room_type} (Capacity: {roomGroup.capacity})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="occupancy_type">Occupancy Type *</Label>
-                <Select
-                  value={formData.occupancy_type}
-                  onValueChange={(value: OccupancyType) => setFormData({ ...formData, occupancy_type: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="single">Single (1 person)</SelectItem>
-                    <SelectItem value="double">Double (2 people)</SelectItem>
-                    <SelectItem value="triple">Triple (3 people)</SelectItem>
-                    <SelectItem value="quad">Quad (4 people)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div className="grid gap-2">
-                <Label htmlFor="board_type">Board/Meal Plan *</Label>
-                <Select
-                  value={formData.board_type}
-                  onValueChange={(value: BoardType) => {
-                    setFormData({ ...formData, board_type: value })
-                    // Auto-update rate when board changes
-                    if (selectedContract) {
-                      const boardOption = selectedContract.board_options?.find(o => o.board_type === value)
-                      const newRate = selectedContract.base_rate + (boardOption?.additional_cost || 0)
-                      setFormData(prev => ({ ...prev, board_type: value, rate: newRate }))
-                    }
-                  }}
-                  disabled={!selectedContract || !selectedContract.board_options || selectedContract.board_options.length === 0}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={
-                      selectedContract?.board_options && selectedContract.board_options.length > 0
-                        ? "Select a board type"
-                        : "No board options in contract"
-                    } />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {selectedContract?.board_options?.map((option) => (
-                      <SelectItem key={option.board_type} value={option.board_type}>
-                        {BOARD_TYPE_LABELS[option.board_type]} 
-                        {option.additional_cost > 0 && ` (+${option.additional_cost} ${selectedContract.currency})`}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {selectedContract && selectedContract.board_options && selectedContract.board_options.length > 0 ? (
-                  <p className="text-xs text-muted-foreground">
-                    Rate auto-updates: Base rate + board cost
-                  </p>
-                ) : (
-                  <p className="text-xs text-orange-600">
-                    Please add board options to the contract first
-                  </p>
-                )}
-              </div>
-              
-              <div className="grid gap-2">
-                <Label htmlFor="rate">Base Rate per Night ({selectedContract?.currency || 'Currency'}) *</Label>
-                <Input
-                  id="rate"
-                  type="number"
-                  step="0.01"
-                  value={formData.rate}
-                  onChange={(e) => setFormData({ ...formData, rate: parseFloat(e.target.value) || 0 })}
-                />
-                {selectedContract && (
-                  <p className="text-xs text-muted-foreground">
-                    Contract base rate: {selectedContract.base_rate} {selectedContract.currency}
-                  </p>
-                )}
-              </div>
-              
-              {/* Cost Breakdown Preview */}
-              {selectedContract && formData.rate > 0 && formData.occupancy_type && (
-                <Card className="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
-                  <CardHeader className="py-3">
-                    <CardTitle className="text-sm font-medium flex items-center gap-2">
-                      <Info className="h-4 w-4 text-blue-600" />
-                      Full Cost Breakdown (per night)
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="pb-3">
-                    {(() => {
-                      const breakdown = calculatePriceBreakdown(
-                        formData.rate,
-                        selectedContract,
-                        formData.occupancy_type,
-                        1
-                      )
-                      return (
-                        <div className="space-y-2 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Base Rate:</span>
-                            <span>{formatCurrency(breakdown.baseRate)}</span>
-                          </div>
-                          {breakdown.resortFee > 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Resort Fee:</span>
-                              <span>{formatCurrency(breakdown.resortFee)}</span>
-                            </div>
-                          )}
-                          {breakdown.vat > 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">VAT ({(selectedContract.tax_rate! * 100).toFixed(0)}%):</span>
-                              <span>{formatCurrency(breakdown.vat)}</span>
-                            </div>
-                          )}
-                          {breakdown.cityTax > 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">City Tax:</span>
-                              <span>{formatCurrency(breakdown.cityTax)}</span>
-                            </div>
-                          )}
-                          {breakdown.supplierCommission > 0 && (
-                            <div className="flex justify-between">
-                              <span className="text-muted-foreground">Supplier Commission:</span>
-                              <span>{formatCurrency(breakdown.supplierCommission)}</span>
-                            </div>
-                          )}
-                          <div className="border-t pt-2 flex justify-between font-semibold">
-                            <span>Total Cost Price:</span>
-                            <span className="text-blue-600 dark:text-blue-400">{formatCurrency(breakdown.totalCost)}</span>
-                          </div>
-                          <p className="text-xs text-muted-foreground pt-1">
-                            This total cost will be used in listings
-                          </p>
-                        </div>
-                      )
-                    })()}
-                  </CardContent>
-                </Card>
-              )}
-            </div>
-            
-            <DialogFooter>
-              <Button variant="outline" onClick={() => {
-                setIsCreateOpen(false)
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsCreateOpen(false);
                 setFormData({
                   contract_id: 0,
-                  room_group_id: '',
-                  occupancy_type: 'double',
-                  board_type: 'bed_breakfast',
+                  room_group_id: "",
+                  board_type: "bed_breakfast",
                   rate: 0,
-                })
-              }}>
-                Cancel
-              </Button>
-              <Button onClick={handleCreate} disabled={!formData.contract_id || !formData.room_group_id}>
-                Create
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+                  single_supplement: 0,
+                  offer_single_rate: false,
+                  triple_rate: 0,
+                  offer_triple_rate: false,
+                });
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreate}
+              disabled={!formData.contract_id || !formData.room_group_id}
+            >
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="space-y-2">
         <div className="flex items-center justify-between mb-2">
@@ -468,16 +617,19 @@ export function Rates() {
             Click the shopping bag icon to create a listing from a rate
           </h2>
         </div>
-        
+
         <Card>
           <CardHeader>
-            <CardTitle>Room Rates by Occupancy</CardTitle>
+            <CardTitle>Room Rates</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="space-y-2">
               {ratesWithFullCost.map((rate) => (
-                <div key={rate.id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-accent/50 transition-colors">
-                  <div className="flex-1 grid grid-cols-7 gap-4 items-center text-sm">
+                <div
+                  key={rate.id}
+                  className="flex items-center justify-between p-3 border rounded-lg hover:bg-accent/50 transition-colors"
+                >
+                  <div className="flex-1 grid grid-cols-6 gap-4 items-center text-sm">
                     <div>
                       <Badge variant="outline">{rate.contractName}</Badge>
                     </div>
@@ -485,10 +637,9 @@ export function Rates() {
                       <span className="font-medium">{rate.roomName}</span>
                     </div>
                     <div>
-                      <Badge>{rate.occupancy_type}</Badge>
-                    </div>
-                    <div>
-                      <Badge variant="secondary">{BOARD_TYPE_LABELS[rate.board_type]}</Badge>
+                      <Badge variant="secondary">
+                        {BOARD_TYPE_LABELS[rate.board_type]}
+                      </Badge>
                     </div>
                     <div className="text-muted-foreground">
                       Base: {formatCurrency(rate.rate)}
@@ -524,7 +675,7 @@ export function Rates() {
                   </div>
                 </div>
               ))}
-              
+
               {ratesWithFullCost.length === 0 && (
                 <div className="text-center py-8 text-muted-foreground">
                   No rates configured. Create your first rate above.
@@ -540,15 +691,17 @@ export function Rates() {
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit Rate</DialogTitle>
-            <DialogDescription>Update rate information.</DialogDescription>
+            <DialogDescription>
+              Update rate information. Occupancy type cannot be changed.
+            </DialogDescription>
           </DialogHeader>
-          
-          {selectedContract && (
+
+          {selectedContract && editingRate && (
             <Card className="bg-muted/50">
               <CardHeader className="py-3">
                 <CardTitle className="text-sm font-medium flex items-center gap-2">
                   <Info className="h-4 w-4" />
-                  Contract Information
+                  Rate Information
                 </CardTitle>
               </CardHeader>
               <CardContent className="pb-3">
@@ -558,212 +711,212 @@ export function Rates() {
                     <p className="font-medium">{selectedContract.hotelName}</p>
                   </div>
                   <div>
-                    <span className="text-muted-foreground">Base Rate:</span>
-                    <p className="font-medium">{selectedContract.base_rate} {selectedContract.currency}</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Tax Rate:</span>
-                    <p className="font-medium">{((selectedContract.tax_rate || 0) * 100).toFixed(2)}%</p>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">Period:</span>
-                    <p className="font-medium">{selectedContract.start_date} to {selectedContract.end_date}</p>
+                    <span className="text-muted-foreground">Occupancy:</span>
+                    <p className="font-medium capitalize">
+                      {editingRate.occupancy_type}
+                      {editingRate.occupancy_type === "single" &&
+                        " (Single Supplement)"}
+                      {editingRate.occupancy_type === "double" &&
+                        " (2 people sharing)"}
+                    </p>
                   </div>
                 </div>
               </CardContent>
             </Card>
           )}
-          
+
           <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="edit-contract_id">Contract *</Label>
-              <Select
-                value={formData.contract_id.toString()}
-                onValueChange={(value) => {
-                  const contractId = parseInt(value)
-                  setFormData({ 
-                    ...formData, 
-                    contract_id: contractId,
-                    room_group_id: '',
-                  })
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a contract" />
-                </SelectTrigger>
-                <SelectContent>
-                  {contracts.map((contract) => (
-                    <SelectItem key={contract.id} value={contract.id.toString()}>
-                      {contract.contract_name} - {contract.hotelName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            
-            <div className="grid gap-2">
-              <Label htmlFor="edit-room_group_id">Room Type *</Label>
-              <Select
-                value={formData.room_group_id}
-                onValueChange={(value) => setFormData({ ...formData, room_group_id: value })}
-                disabled={!selectedContract}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select a room type" />
-                </SelectTrigger>
-                <SelectContent>
-                  {availableRoomGroups.map((roomGroup) => (
-                    <SelectItem key={roomGroup.id} value={roomGroup.id}>
-                      {roomGroup.room_type} (Capacity: {roomGroup.capacity})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid gap-2">
-              <Label htmlFor="edit-occupancy_type">Occupancy Type *</Label>
-              <Select
-                value={formData.occupancy_type}
-                onValueChange={(value: OccupancyType) => setFormData({ ...formData, occupancy_type: value })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="single">Single (1 person)</SelectItem>
-                  <SelectItem value="double">Double (2 people)</SelectItem>
-                  <SelectItem value="triple">Triple (3 people)</SelectItem>
-                  <SelectItem value="quad">Quad (4 people)</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
             <div className="grid gap-2">
               <Label htmlFor="edit-board_type">Board/Meal Plan *</Label>
               <Select
                 value={formData.board_type}
                 onValueChange={(value: BoardType) => {
-                  setFormData({ ...formData, board_type: value })
-                  // Auto-update rate when board changes
-                  if (selectedContract) {
-                    const boardOption = selectedContract.board_options?.find(o => o.board_type === value)
-                    const newRate = selectedContract.base_rate + (boardOption?.additional_cost || 0)
-                    setFormData(prev => ({ ...prev, board_type: value, rate: newRate }))
-                  }
+                  setFormData({ ...formData, board_type: value });
                 }}
-                disabled={!selectedContract || !selectedContract.board_options || selectedContract.board_options.length === 0}
+                disabled={
+                  !selectedContract ||
+                  !selectedContract.board_options ||
+                  selectedContract.board_options.length === 0
+                }
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={
-                    selectedContract?.board_options && selectedContract.board_options.length > 0
-                      ? "Select a board type"
-                      : "No board options in contract"
-                  } />
+                  <SelectValue
+                    placeholder={
+                      selectedContract?.board_options &&
+                      selectedContract.board_options.length > 0
+                        ? "Select a board type"
+                        : "No board options in contract"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {selectedContract?.board_options?.map((option) => (
-                    <SelectItem key={option.board_type} value={option.board_type}>
-                      {BOARD_TYPE_LABELS[option.board_type]} 
-                      {option.additional_cost > 0 && ` (+${option.additional_cost} ${selectedContract.currency})`}
+                    <SelectItem
+                      key={option.board_type}
+                      value={option.board_type}
+                    >
+                      {BOARD_TYPE_LABELS[option.board_type]}
+                      {option.additional_cost > 0 &&
+                        ` (+${option.additional_cost} ${selectedContract.currency})`}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
-              {selectedContract && selectedContract.board_options && selectedContract.board_options.length > 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  Rate auto-updates: Base rate + board cost
-                </p>
-              ) : (
-                <p className="text-xs text-orange-600">
-                  Please add board options to the contract first
-                </p>
-              )}
             </div>
-            
+
             <div className="grid gap-2">
-              <Label htmlFor="edit-rate">Base Rate per Night ({selectedContract?.currency || 'Currency'}) *</Label>
+              <Label htmlFor="edit-rate">
+                Base Room Rate per Night (
+                {selectedContract?.currency || "Currency"}) *
+              </Label>
               <Input
                 id="edit-rate"
                 type="number"
                 step="0.01"
                 value={formData.rate}
-                onChange={(e) => setFormData({ ...formData, rate: parseFloat(e.target.value) || 0 })}
+                onChange={(e) =>
+                  setFormData({
+                    ...formData,
+                    rate: parseFloat(e.target.value) || 0,
+                  })
+                }
+                placeholder="Base room rate (before board costs)"
               />
               {selectedContract && (
-                <p className="text-xs text-muted-foreground">
-                  Contract base rate: {selectedContract.base_rate} {selectedContract.currency}
-                </p>
+                <div className="text-xs text-muted-foreground space-y-1">
+                  <p>
+                    Contract base rate: {selectedContract.base_rate}{" "}
+                    {selectedContract.currency}
+                  </p>
+                  {(() => {
+                    const boardOption = selectedContract.board_options?.find(
+                      (o) => o.board_type === formData.board_type
+                    );
+                    const totalRate =
+                      formData.rate + (boardOption?.additional_cost || 0);
+                    return (
+                      <p className="font-medium text-blue-600">
+                        Total rate with {BOARD_TYPE_LABELS[formData.board_type]}
+                        : {formatCurrency(totalRate)}{" "}
+                        {selectedContract.currency}
+                        {boardOption &&
+                          boardOption.additional_cost > 0 &&
+                          ` (+${boardOption.additional_cost} board cost)`}
+                      </p>
+                    );
+                  })()}
+                </div>
               )}
             </div>
-            
+
             {/* Cost Breakdown Preview */}
-            {selectedContract && formData.rate > 0 && formData.occupancy_type && (
+            {selectedContract && formData.rate > 0 && editingRate && (
               <Card className="bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800">
                 <CardHeader className="py-3">
                   <CardTitle className="text-sm font-medium flex items-center gap-2">
                     <Info className="h-4 w-4 text-blue-600" />
-                    Full Cost Breakdown (per night)
+                    Full Cost Breakdown (per night, {editingRate.occupancy_type}
+                    )
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="pb-3">
                   {(() => {
+                    // Calculate board cost
+                    const boardOption = selectedContract.board_options?.find(
+                      (o) => o.board_type === formData.board_type
+                    );
+                    const boardCost = boardOption?.additional_cost || 0;
+
                     const breakdown = calculatePriceBreakdown(
-                      formData.rate,
+                      formData.rate, // Base rate only
                       selectedContract,
-                      formData.occupancy_type,
-                      1
-                    )
+                      editingRate.occupancy_type,
+                      1,
+                      boardCost // Board cost passed separately
+                    );
                     return (
                       <div className="space-y-2 text-sm">
                         <div className="flex justify-between">
-                          <span className="text-muted-foreground">Base Rate:</span>
-                          <span>{formatCurrency(breakdown.baseRate)}</span>
+                          <span className="text-muted-foreground">
+                            Base Room Rate:
+                          </span>
+                          <span>{formatCurrency(formData.rate)}</span>
                         </div>
+                        {boardOption && boardOption.additional_cost > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-muted-foreground">
+                              {BOARD_TYPE_LABELS[formData.board_type]} Cost:
+                            </span>
+                            <span>
+                              +{formatCurrency(boardOption.additional_cost)}
+                            </span>
+                          </div>
+                        )}
+                        <div className="flex justify-between font-medium">
+                          <span className="text-muted-foreground">
+                            Subtotal (Rate + Board):
+                          </span>
+                          <span>
+                            {formatCurrency(formData.rate + boardCost)}
+                          </span>
+                        </div>
+                        {breakdown.supplierCommission > 0 && (
+                          <div className="flex justify-between text-green-600">
+                            <span className="text-muted-foreground">
+                              Supplier Commission (your discount):
+                            </span>
+                            <span>
+                              -{formatCurrency(breakdown.supplierCommission)}
+                            </span>
+                          </div>
+                        )}
                         {breakdown.resortFee > 0 && (
                           <div className="flex justify-between">
-                            <span className="text-muted-foreground">Resort Fee:</span>
-                            <span>{formatCurrency(breakdown.resortFee)}</span>
+                            <span className="text-muted-foreground">
+                              Resort Fee:
+                            </span>
+                            <span>+{formatCurrency(breakdown.resortFee)}</span>
                           </div>
                         )}
                         {breakdown.vat > 0 && (
                           <div className="flex justify-between">
-                            <span className="text-muted-foreground">VAT ({(selectedContract.tax_rate! * 100).toFixed(0)}%):</span>
-                            <span>{formatCurrency(breakdown.vat)}</span>
+                            <span className="text-muted-foreground">
+                              VAT (
+                              {(selectedContract.tax_rate! * 100).toFixed(0)}%):
+                            </span>
+                            <span>+{formatCurrency(breakdown.vat)}</span>
                           </div>
                         )}
                         {breakdown.cityTax > 0 && (
                           <div className="flex justify-between">
-                            <span className="text-muted-foreground">City Tax:</span>
-                            <span>{formatCurrency(breakdown.cityTax)}</span>
-                          </div>
-                        )}
-                        {breakdown.supplierCommission > 0 && (
-                          <div className="flex justify-between">
-                            <span className="text-muted-foreground">Supplier Commission:</span>
-                            <span>{formatCurrency(breakdown.supplierCommission)}</span>
+                            <span className="text-muted-foreground">
+                              City Tax:
+                            </span>
+                            <span>+{formatCurrency(breakdown.cityTax)}</span>
                           </div>
                         )}
                         <div className="border-t pt-2 flex justify-between font-semibold">
                           <span>Total Cost Price:</span>
-                          <span className="text-blue-600 dark:text-blue-400">{formatCurrency(breakdown.totalCost)}</span>
+                          <span className="text-blue-600 dark:text-blue-400">
+                            {formatCurrency(breakdown.totalCost)}
+                          </span>
                         </div>
-                        <p className="text-xs text-muted-foreground pt-1">
-                          This total cost will be used in listings
-                        </p>
                       </div>
-                    )
+                    );
                   })()}
                 </CardContent>
               </Card>
             )}
           </div>
-          
+
           <DialogFooter>
-            <Button variant="outline" onClick={() => {
-              setIsEditOpen(false)
-              setEditingRate(null)
-            }}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsEditOpen(false);
+                setEditingRate(null);
+              }}
+            >
               Cancel
             </Button>
             <Button onClick={handleUpdate}>Update</Button>
@@ -771,5 +924,5 @@ export function Rates() {
         </DialogContent>
       </Dialog>
     </div>
-  )
+  );
 }

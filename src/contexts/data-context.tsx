@@ -33,7 +33,7 @@ export interface Hotel {
 
 export interface BoardOption {
   board_type: BoardType
-  additional_cost: number // Additional cost per night on top of base rate
+  additional_cost: number // Additional cost per PERSON per night
 }
 
 export interface AttritionStage {
@@ -56,6 +56,16 @@ export interface PaymentSchedule {
   notes?: string
 }
 
+export interface RoomAllocation {
+  room_group_id: string // References hotel.room_groups[].id
+  quantity: number // Number of rooms allocated
+}
+
+export interface OccupancyRate {
+  occupancy_type: OccupancyType
+  rate: number // Base rate for this occupancy
+}
+
 export interface Contract {
   id: number
   hotel_id: number
@@ -66,6 +76,18 @@ export interface Contract {
   total_rooms: number
   base_rate: number
   currency: string
+  
+  // ROOM ALLOCATIONS (replaces Stock entity)
+  room_allocations?: RoomAllocation[] // Allocated rooms per room type
+  
+  // OCCUPANCY PRICING STRATEGY
+  pricing_strategy?: 'per_occupancy' | 'flat_rate' // How rates vary by occupancy
+  occupancy_rates?: OccupancyRate[] // If per_occupancy, rates for each occupancy type
+  
+  // MARKUP SETTINGS
+  markup_percentage?: number // Default markup for regular nights (e.g., 0.60 = 60%)
+  shoulder_markup_percentage?: number // Markup for shoulder nights (e.g., 0.30 = 30%)
+  
   // Stay restrictions
   days_of_week?: {
     mon: boolean
@@ -104,43 +126,73 @@ export type BoardType = 'room_only' | 'bed_breakfast' | 'half_board' | 'full_boa
 
 export interface Rate {
   id: number
-  contract_id: number
-  contractName: string
+  contract_id?: number // Optional for buy-to-order rates
+  contractName?: string
+  hotel_id?: number // For buy-to-order rates without contract
+  hotelName?: string
   room_group_id: string // References hotel.room_groups[].id
   roomName: string
-  occupancy_type: OccupancyType
+  occupancy_type: OccupancyType // Single, Double, Triple, or Quad
   board_type: BoardType // Meal plan included
-  rate: number // Net rate including board
-  // Tax rate and currency inherited from contract, but can be overridden
-  tax_rate?: number
+  
+  // RATE STRUCTURE
+  rate: number // Base room rate for this occupancy
+  board_cost?: number // Board cost (per person per night for contract, total for buy-to-order)
+  
+  // FOR BUY-TO-ORDER (estimated costs)
+  valid_from?: string // Optional validity start date
+  valid_to?: string // Optional validity end date
+  estimated_costs?: boolean // Flag to indicate this is an estimated rate
+  
+  // RATE-LEVEL COSTS (per room per night, unless specified)
+  // For contract rates: optional overrides
+  // For buy-to-order rates: required estimated costs
+  tax_rate?: number // VAT/Sales tax
+  city_tax_per_person_per_night?: number // City tax per person
+  resort_fee_per_night?: number // Resort fee per room
+  supplier_commission_rate?: number // Commission rate (expected discount)
+  
+  // MARKUP SETTINGS
+  markup_percentage?: number // Default markup for regular nights (e.g., 0.60 = 60%)
+  shoulder_markup_percentage?: number // Markup for shoulder nights (e.g., 0.30 = 30%)
+  
+  // Other
   currency?: string
+  board_included?: boolean // Deprecated - kept for backwards compatibility
 }
 
 export interface Listing {
   id: number
   tour_id: number
   tourName: string
-  // For inventory: references contract (pre-negotiated)
-  // For buy-to-order: optional (or references expected pricing hotel)
-  contract_id?: number
+  
+  // SIMPLIFIED: Just link tour to contract OR hotel
+  contract_id?: number // For inventory (pre-contracted)
   contractName?: string
-  // For buy-to-order: specify hotel directly
-  hotel_id?: number
+  hotel_id?: number // For buy-to-order (ad-hoc)
   hotelName?: string
-  // Preferred: link to a stock/allotment record for inventory
-  stock_id?: number
-  room_group_id: string // References hotel.room_groups[].id
+  
+  room_group_id: string // Which room type from the hotel
   roomName: string
-  quantity: number
   purchase_type: 'inventory' | 'buy_to_order'
-  // Pricing breakdown
-  cost_price: number // For inventory: from contract. For buy-to-order: estimated/expected
-  selling_price: number // What customer pays
-  commission_rate?: number // Your markup on base nights (percentage, e.g., 0.15 = 15%)
-  shoulder_night_margin?: number // Your markup on shoulder nights (percentage, e.g., 0.25 = 25%)
-  sold: number
+  
+  // Legacy fields (kept for backwards compatibility, not used in new flow)
+  stock_id?: number
+  quantity?: number
+  cost_price?: number
+  selling_price?: number
+  commission_rate?: number
+  shoulder_night_margin?: number
+  markup_percentage?: number
+  markup_type?: 'percentage' | 'fixed'
+  markup_fixed_amount?: number
+  sold?: number
 }
 
+/**
+ * @deprecated Stock entity has been merged into Contract.room_allocations
+ * This interface is kept for backward compatibility only
+ */
 export interface Stock {
   id: number
   contract_id: number
@@ -162,29 +214,20 @@ export interface Summary {
   upcomingContractsCount: number
 }
 
-export interface Booking {
-  id: number
+export interface BookingRoom {
   listing_id: number
-  rate_id?: number // Optional for backward compatibility
-  tourName: string
-  contractName: string
+  rate_id: number
+  hotelName: string
   roomName: string
+  contractName: string
   occupancy_type: OccupancyType
+  board_type: BoardType
   purchase_type: 'inventory' | 'buy_to_order'
-  customer_name: string
-  customer_email: string
-  // Date-based booking
-  check_in_date: string // ISO format date
-  check_out_date: string // ISO format date
-  quantity: number // Number of rooms
-  nights: number // Calculated: number of nights
-  // Pricing breakdown
-  nightly_rates?: number[] // Rate for each night [night1, night2, ...]
-  total_price: number
-  booking_date: string
-  status: 'confirmed' | 'pending' | 'cancelled'
+  quantity: number // Number of this specific room type
+  price_per_room: number // Price per room for the entire stay
+  total_price: number // quantity × price_per_room
+  // Purchase status for this room (for buy-to-order)
   purchase_status?: 'not_required' | 'pending_purchase' | 'purchased' | 'failed'
-  // Purchase order details (for buy-to-order)
   purchase_order?: {
     assigned_to?: string
     hotel_contact?: string
@@ -194,6 +237,24 @@ export interface Booking {
     total_cost?: number
     notes?: string
   }
+}
+
+export interface Booking {
+  id: number
+  tour_id: number
+  tourName: string
+  customer_name: string
+  customer_email: string
+  // Date-based booking
+  check_in_date: string // ISO format date
+  check_out_date: string // ISO format date
+  nights: number // Calculated: number of nights
+  // Rooms in this booking
+  rooms: BookingRoom[]
+  // Pricing
+  total_price: number // Sum of all rooms
+  booking_date: string
+  status: 'confirmed' | 'pending' | 'cancelled'
 }
 
 interface DataContextType {
@@ -225,7 +286,7 @@ interface DataContextType {
   addListing: (listing: Omit<Listing, 'id' | 'tourName' | 'contractName' | 'roomName'>) => void
   updateListing: (id: number, listing: Partial<Listing>) => void
   deleteListing: (id: number) => void
-  addBooking: (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'purchase_order'>) => void
+  addBooking: (booking: Omit<Booking, 'id' | 'tourName' | 'booking_date' | 'status'>) => void
   updateBooking: (id: number, booking: Partial<Booking>) => void
   cancelBooking: (id: number) => void
   recordPurchaseDetails: (bookingId: number, purchaseDetails: {
@@ -319,6 +380,21 @@ const initialData = {
       total_rooms: 100,
       base_rate: 120,
       currency: "EUR",
+      // Room allocations (merged from Stock)
+      room_allocations: [
+        { room_group_id: "rg-1", quantity: 60 }, // 60 Standard Double rooms
+        { room_group_id: "rg-2", quantity: 40 }  // 40 Deluxe Suite rooms
+      ],
+      // Occupancy pricing strategy
+      pricing_strategy: "per_occupancy" as const,
+      occupancy_rates: [
+        { occupancy_type: "single" as const, rate: 100 },
+        { occupancy_type: "double" as const, rate: 130 },
+        { occupancy_type: "triple" as const, rate: 150 }
+      ],
+      // Markup settings
+      markup_percentage: 0.60,
+      shoulder_markup_percentage: 0.30,
       days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
       min_nights: 1,
       max_nights: 14,
@@ -359,6 +435,8 @@ const initialData = {
     }
   ],
   rates: [
+    // These will be auto-generated from contract when created
+    // Keeping sample data for reference
     {
       id: 1,
       contract_id: 1,
@@ -367,7 +445,12 @@ const initialData = {
       roomName: "Standard Double",
       occupancy_type: "single" as const,
       board_type: "bed_breakfast" as const,
-      rate: 100,
+      rate: 100, // Base room rate for single occupancy
+      board_cost: 15, // Per person per night
+      board_included: true,
+      markup_percentage: 0.60,
+      shoulder_markup_percentage: 0.30,
+      currency: "EUR"
     },
     {
       id: 2,
@@ -377,7 +460,12 @@ const initialData = {
       roomName: "Standard Double",
       occupancy_type: "double" as const,
       board_type: "bed_breakfast" as const,
-      rate: 130,
+      rate: 130, // Base room rate for double occupancy
+      board_cost: 15, // Per person per night
+      board_included: true,
+      markup_percentage: 0.60,
+      shoulder_markup_percentage: 0.30,
+      currency: "EUR"
     },
     {
       id: 3,
@@ -387,7 +475,12 @@ const initialData = {
       roomName: "Standard Double",
       occupancy_type: "triple" as const,
       board_type: "bed_breakfast" as const,
-      rate: 150,
+      rate: 150, // Base room rate for triple occupancy
+      board_cost: 15, // Per person per night
+      board_included: true,
+      markup_percentage: 0.60,
+      shoulder_markup_percentage: 0.30,
+      currency: "EUR"
     },
     {
       id: 4,
@@ -397,19 +490,15 @@ const initialData = {
       roomName: "Standard Double",
       occupancy_type: "double" as const,
       board_type: "half_board" as const,
-      rate: 160,
+      rate: 160, // Base room rate for double occupancy
+      board_cost: 35, // Per person per night (half board)
+      board_included: true,
+      markup_percentage: 0.60,
+      shoulder_markup_percentage: 0.30,
+      currency: "EUR"
     }
   ],
-  stocks: [
-    {
-      id: 1,
-      contract_id: 1,
-      room_group_id: 'rg-1',
-      roomName: 'Standard Double',
-      quantity: 100,
-      notes: 'Initial allotment from contract'
-    }
-  ],
+  stocks: [], // Deprecated - now managed in Contract.room_allocations
   listings: [
     {
       id: 1,
@@ -473,23 +562,32 @@ const initialData = {
   bookings: [
     {
       id: 1,
-      listing_id: 1,
+      tour_id: 1,
       tourName: "Spring in Paris",
-      contractName: "May 2025 Block",
-      roomName: "Standard Double",
-      occupancy_type: "double" as const,
-      purchase_type: "inventory" as const,
       customer_name: "John Smith",
       customer_email: "john.smith@example.com",
       check_in_date: "2025-05-05",
       check_out_date: "2025-05-07",
-      quantity: 2,
       nights: 2,
-      nightly_rates: [140, 140], // 2 nights at contract rate
+      rooms: [
+        {
+          listing_id: 1,
+          rate_id: 1,
+          hotelName: "Grand Hotel Paris",
+          roomName: "Standard Double",
+          contractName: "May 2025 Block",
+          occupancy_type: "double" as const,
+          board_type: "bed_breakfast" as const,
+          purchase_type: "inventory" as const,
+          quantity: 2,
+          price_per_room: 140,
+          total_price: 280,
+          purchase_status: "not_required" as const,
+        }
+      ],
       total_price: 280,
       booking_date: "2025-01-15",
       status: "confirmed" as const,
-      purchase_status: "not_required" as const,
     }
   ]
 }
@@ -529,7 +627,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [hotels, setHotelsState] = useState<Hotel[]>(() => loadFromStorage(STORAGE_KEYS.hotels, initialData.hotels))
   const [contracts, setContractsState] = useState<Contract[]>(() => loadFromStorage(STORAGE_KEYS.contracts, initialData.contracts))
   const [rates, setRatesState] = useState<Rate[]>(() => loadFromStorage(STORAGE_KEYS.rates, initialData.rates))
-  const [stocks, setStocksState] = useState<Stock[]>(() => loadFromStorage(STORAGE_KEYS.stocks, initialData.stocks))
+  // Stock state deprecated - keeping for backward compatibility but returning empty array
+  const [stocks] = useState<Stock[]>([])
   const [listings, setListingsState] = useState<Listing[]>(() => loadFromStorage(STORAGE_KEYS.listings, initialData.listings))
   const [bookings, setBookingsState] = useState<Booking[]>(() => loadFromStorage(STORAGE_KEYS.bookings, initialData.bookings))
 
@@ -566,12 +665,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     })
   }
 
-  const setStocks = (data: Stock[] | ((prev: Stock[]) => Stock[])) => {
-    setStocksState(prev => {
-      const next = typeof data === 'function' ? data(prev) : data
-      saveToStorage(STORAGE_KEYS.stocks, next)
-      return next
-    })
+  // setStocks deprecated - no-op function for backward compatibility
+  const setStocks = (_data: Stock[] | ((prev: Stock[]) => Stock[])) => {
+    console.warn('setStocks is deprecated. Stocks are now managed in Contract.room_allocations')
   }
 
   const setListings = (data: Listing[] | ((prev: Listing[]) => Listing[])) => {
@@ -627,6 +723,74 @@ export function DataProvider({ children }: { children: ReactNode }) {
       hotelName: hotel?.name || ''
     }
     setContracts([...contracts, newContract])
+    
+    // AUTO-GENERATE RATES
+    autoGenerateRates(newContract as Contract, hotel)
+  }
+  
+  // Auto-generate rates for a contract
+  const autoGenerateRates = (contract: Contract, hotel?: Hotel) => {
+    if (!hotel) hotel = hotels.find(h => h.id === contract.hotel_id)
+    if (!hotel) return
+    
+    const newRates: Rate[] = []
+    const baseId = Math.max(...rates.map(r => r.id), 0) + 1
+    let currentId = baseId
+    
+    // Determine which occupancies to create
+    const occupanciesToCreate: Array<{occupancy: OccupancyType, rate: number}> = []
+    
+    if (contract.pricing_strategy === 'flat_rate') {
+      // Flat rate: create only double occupancy (standard)
+      occupanciesToCreate.push({ occupancy: 'double', rate: contract.base_rate })
+    } else {
+      // Per occupancy: create rates for each specified occupancy
+      if (contract.occupancy_rates && contract.occupancy_rates.length > 0) {
+        contract.occupancy_rates.forEach(occRate => {
+          occupanciesToCreate.push({ occupancy: occRate.occupancy_type, rate: occRate.rate })
+        })
+      } else {
+        // Fallback: create double occupancy only
+        occupanciesToCreate.push({ occupancy: 'double', rate: contract.base_rate })
+      }
+    }
+    
+    // For each room allocation
+    const roomAllocations = contract.room_allocations || []
+    roomAllocations.forEach(allocation => {
+      const roomGroup = hotel!.room_groups.find(rg => rg.id === allocation.room_group_id)
+      if (!roomGroup) return
+      
+      // For each board option
+      const boardOptions = contract.board_options || [{ board_type: 'room_only' as BoardType, additional_cost: 0 }]
+      boardOptions.forEach(boardOption => {
+        
+        // For each occupancy
+        occupanciesToCreate.forEach(({occupancy, rate: occupancyRate}) => {
+          const newRate: Rate = {
+            id: currentId++,
+            contract_id: contract.id,
+            contractName: contract.contract_name,
+            room_group_id: allocation.room_group_id,
+            roomName: roomGroup.room_type,
+            occupancy_type: occupancy,
+            board_type: boardOption.board_type,
+            rate: occupancyRate, // Base room rate for this occupancy
+            board_cost: boardOption.additional_cost, // Per person per night
+            board_included: true, // Board from contract
+            markup_percentage: contract.markup_percentage || 0.60,
+            shoulder_markup_percentage: contract.shoulder_markup_percentage || 0.30,
+            currency: contract.currency,
+          }
+          newRates.push(newRate)
+        })
+      })
+    })
+    
+    if (newRates.length > 0) {
+      setRates([...rates, ...newRates])
+      console.log(`✅ Auto-generated ${newRates.length} rates for contract ${contract.contract_name}`)
+    }
   }
 
   const updateContract = (id: number, contract: Partial<Contract>) => {
@@ -680,37 +844,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setRates(rates.filter(r => r.id !== id))
   }
 
-  // Stock CRUD
-  const addStock = (stock: Omit<Stock, 'id' | 'roomName'>) => {
-    const contract = contracts.find(c => c.id === stock.contract_id)
-    const hotel = hotels.find(h => h.id === contract?.hotel_id)
-    const roomGroup = hotel?.room_groups.find(rg => rg.id === stock.room_group_id)
-    const newStock: Stock = {
-      ...stock,
-      id: Math.max(...stocks.map(s => s.id), 0) + 1,
-      roomName: roomGroup?.room_type || ''
-    }
-    setStocks([...stocks, newStock])
+  // Stock CRUD - Deprecated (use Contract.room_allocations instead)
+  /**
+   * @deprecated Use updateContract() with room_allocations instead
+   */
+  const addStock = (_stock: Omit<Stock, 'id' | 'roomName'>) => {
+    console.warn('addStock is deprecated. Use updateContract() with room_allocations instead.')
   }
 
-  const updateStock = (id: number, stock: Partial<Stock>) => {
-    setStocks(stocks.map(s => {
-      if (s.id === id) {
-        const sourceContract = contracts.find(c => c.id === (stock.contract_id || s.contract_id))
-        const hotel = hotels.find(h => h.id === sourceContract?.hotel_id)
-        const roomGroup = hotel?.room_groups.find(rg => rg.id === (stock.room_group_id || s.room_group_id))
-        return {
-          ...s,
-          ...stock,
-          roomName: roomGroup?.room_type || s.roomName,
-        }
-      }
-      return s
-    }))
+  /**
+   * @deprecated Use updateContract() with room_allocations instead
+   */
+  const updateStock = (_id: number, _stock: Partial<Stock>) => {
+    console.warn('updateStock is deprecated. Use updateContract() with room_allocations instead.')
   }
 
-  const deleteStock = (id: number) => {
-    setStocks(stocks.filter(s => s.id !== id))
+  /**
+   * @deprecated Use updateContract() with room_allocations instead
+   */
+  const deleteStock = (_id: number) => {
+    console.warn('deleteStock is deprecated. Use updateContract() with room_allocations instead.')
   }
 
   // Listing CRUD
@@ -777,86 +930,106 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // Booking CRUD
-  const addBooking = (booking: Omit<Booking, 'id' | 'tourName' | 'contractName' | 'roomName' | 'purchase_type' | 'booking_date' | 'status' | 'purchase_status' | 'hotel_confirmation'>) => {
-    const listing = listings.find(l => l.id === booking.listing_id)
-    if (!listing) {
-      alert('Listing not found')
+  const addBooking = (booking: Omit<Booking, 'id' | 'tourName' | 'booking_date' | 'status'>) => {
+    const tour = tours.find(t => t.id === booking.tour_id)
+    if (!tour) {
+      alert('Tour not found')
       return
     }
 
-    // Check availability (strict for inventory, flexible for buy-to-order)
-    let available = 0
-    
-    if (listing.purchase_type === 'inventory' && listing.stock_id) {
-      // For inventory listings, check stock availability
-      const stock = stocks.find(s => s.id === listing.stock_id)
-      if (stock) {
-        const sold = bookings
-          .filter(b => b.listing_id === listing.id && b.status !== 'cancelled')
-          .reduce((sum, b) => sum + b.quantity, 0)
-        available = stock.quantity - sold
+    // Check availability for each room
+    for (const room of booking.rooms) {
+      // NEW SYSTEM: If listing_id is 0, use rate-based validation
+      if (room.listing_id === 0) {
+        // Get rate and contract from rate_id
+        const rate = rates.find(r => r.id === room.rate_id)
+        if (!rate) {
+          console.warn(`Rate ${room.rate_id} not found, skipping availability check`)
+          continue
+        }
+
+        const contract = contracts.find(c => c.id === rate.contract_id)
+        if (!contract) {
+          console.warn(`Contract for rate ${room.rate_id} not found, skipping availability check`)
+          continue
+        }
+
+        // Check availability from contract allocations
+        if (room.purchase_type === 'inventory') {
+          const allocation = contract.room_allocations?.find(a => a.room_group_id === rate.room_group_id)
+          
+          if (allocation) {
+            // Calculate already booked rooms for this rate
+            const sold = bookings
+              .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
+              .flatMap(b => b.rooms)
+              .filter(r => r.rate_id === room.rate_id)
+              .reduce((sum, r) => sum + r.quantity, 0)
+            const available = allocation.quantity - sold
+            
+            if (room.quantity > available) {
+              alert(`Only ${available} ${room.roomName} available in inventory!`)
+              return
+            }
+          }
+        }
+        continue
       }
-      
-      // Inventory: Hard limit
-      if (booking.quantity > available) {
-        alert(`Only ${available} rooms available in inventory!`)
+
+      // OLD SYSTEM: Use listing-based validation
+      const listing = listings.find(l => l.id === room.listing_id)
+      if (!listing) {
+        alert(`Listing not found for ${room.roomName}`)
         return
       }
-    } else {
-      // Buy-to-order: Always allow (flexible capacity)
-      available = 999 // Large number to indicate flexible capacity
+
+      // Check availability for inventory items (from contract allocations)
+      if (listing.purchase_type === 'inventory' && listing.contract_id) {
+        const contract = contracts.find(c => c.id === listing.contract_id)
+        const allocation = contract?.room_allocations?.find(a => a.room_group_id === listing.room_group_id)
+        
+        if (allocation) {
+          const sold = bookings
+            .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
+            .flatMap(b => b.rooms)
+            .filter(r => r.listing_id === listing.id)
+            .reduce((sum, r) => sum + r.quantity, 0)
+          const available = allocation.quantity - sold
+          
+          if (room.quantity > available) {
+            alert(`Only ${available} ${room.roomName} available in inventory!`)
+            return
+          }
+        }
+      }
     }
 
-    // Determine purchase status based on listing type
-    let purchaseStatus: 'not_required' | 'pending_purchase' | 'purchased' = 'not_required'
+    // Determine overall booking status
     let bookingStatus: 'confirmed' | 'pending' = 'confirmed'
+    const hasBuyToOrder = booking.rooms.some(r => r.purchase_type === 'buy_to_order')
     
-    if (listing.purchase_type === 'buy_to_order') {
-      purchaseStatus = 'pending_purchase'
-      bookingStatus = 'pending' // Pending until operations purchases rooms
-      
-      // Notify operations team (console log simulates notification)
-      console.log(`OPERATIONS ALERT - ACTION REQUIRED:
-      ==========================================
-      BUY-TO-ORDER BOOKING CREATED
-      
-      CUSTOMER: ${booking.customer_name}
-      TOUR: ${listing.tourName || 'N/A'}
-      HOTEL: ${listing.hotelName || 'N/A'}
-      ROOM: ${listing.roomName}
-      QUANTITY: ${booking.quantity} rooms
-      SELLING PRICE: ${booking.total_price} (total to customer)
-      
-      ACTION: Operations team must purchase these 
-              ${booking.quantity} rooms from the hotel.
-      
-      Next Steps:
-      1. Contact hotel to purchase rooms
-      2. Enter purchase details in system
-      3. Confirm booking once purchased
-      ==========================================`)
+    if (hasBuyToOrder) {
+      bookingStatus = 'pending'
+      console.log(`OPERATIONS ALERT - BUY-TO-ORDER BOOKING CREATED
+      Customer: ${booking.customer_name}
+      Tour: ${tour.name}
+      Rooms: ${booking.rooms.map(r => `${r.quantity}× ${r.roomName} (${r.occupancy_type})`).join(', ')}
+      Total: ${booking.total_price}
+      `)
     }
 
     const newBooking: Booking = {
       ...booking,
       id: Math.max(...bookings.map(b => b.id), 0) + 1,
-      tourName: listing.tourName,
-      contractName: listing.contractName || '',
-      roomName: listing.roomName,
-      // occupancy_type is chosen from the rate at booking time; keep undefined here
-      purchase_type: listing.purchase_type,
+      tourName: tour.name,
       booking_date: new Date().toISOString().split('T')[0],
       status: bookingStatus,
-      purchase_status: purchaseStatus,
     }
     
     setBookings([...bookings, newBooking])
     
-    // Note: Sold quantities are now tracked via bookings, not listings
-
-    // Show appropriate message
-    if (listing.purchase_type === 'buy_to_order') {
-      alert(`Booking created!\n\nOPERATIONS TEAM NOTIFIED\n\nBooking Status: PENDING\nPurchase Status: Awaiting purchase\n\nThe operations team has been notified to purchase these rooms from the hotel. The booking will be confirmed once rooms are purchased.`)
+    if (hasBuyToOrder) {
+      alert(`Booking created!\n\nOPERATIONS TEAM NOTIFIED\n\nSome rooms require purchase from hotel.`)
     }
   }
 
@@ -876,49 +1049,24 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   ) => {
     const booking = bookings.find(b => b.id === bookingId)
-    if (!booking || booking.purchase_type !== 'buy_to_order') return
+    if (!booking) return
 
-    const totalCost = purchaseDetails.cost_per_room * booking.quantity
-    const purchaseDate = new Date().toISOString().split('T')[0]
-
+    // TODO: Update for new room-based structure
     setBookings(bookings.map(b => 
       b.id === bookingId 
-        ? { 
-            ...b, 
-            status: 'confirmed' as const,
-            purchase_status: 'purchased' as const,
-            purchase_order: {
-              assigned_to: purchaseDetails.assigned_to,
-              hotel_contact: purchaseDetails.hotel_contact,
-              purchase_date: purchaseDate,
-              hotel_confirmation: purchaseDetails.hotel_confirmation,
-              cost_per_room: purchaseDetails.cost_per_room,
-              total_cost: totalCost,
-              notes: purchaseDetails.notes || ''
-            }
-          }
+        ? { ...b, status: 'confirmed' as const }
         : b
     ))
 
-    console.log(`PURCHASE RECORDED:
-    Booking ID: ${bookingId}
-    Purchased By: ${purchaseDetails.assigned_to}
-    Hotel Confirmation: ${purchaseDetails.hotel_confirmation}
-    Cost: ${totalCost} (${purchaseDetails.cost_per_room} × ${booking.quantity})
-    Profit Margin: ${booking.total_price - totalCost}
-    `)
+    console.log(`PURCHASE RECORDED for booking ${bookingId}`)
   }
 
   const cancelBooking = (id: number) => {
     const booking = bookings.find(b => b.id === id)
     if (!booking) return
 
-    // Return quantity to listing
-    setListings(listings.map(l => 
-      l.id === booking.listing_id 
-        ? { ...l, sold: l.sold - booking.quantity }
-        : l
-    ))
+    // Note: Inventory tracking is now done via stock, not listings
+    // Rooms will be automatically available when booking is cancelled
 
     // Mark as cancelled
     setBookings(bookings.map(b => 

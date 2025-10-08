@@ -11,6 +11,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -20,7 +21,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useData, Listing } from '@/contexts/data-context'
-import { Plus, Info, AlertCircle, Ticket, BedDouble } from 'lucide-react'
+import { Plus, Info, AlertCircle, Ticket, BedDouble, DollarSign } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -30,7 +31,7 @@ import {
 import { toast } from 'sonner'
 
 export function Listings() {
-  const { listings, tours, contracts, hotels, stocks, addListing, updateListing, deleteListing } = useData()
+  const { listings, tours, contracts, hotels, addListing, updateListing, deleteListing } = useData()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editingListing, setEditingListing] = useState<Listing | null>(null)
@@ -39,7 +40,6 @@ export function Listings() {
     contract_id: 0,
     hotel_id: 0,
     room_group_id: '',
-    stock_id: 0,
     purchase_type: 'inventory' as 'inventory' | 'buy_to_order',
     // Legacy fields kept for type compatibility but not used in UI
     quantity: 0,
@@ -128,8 +128,6 @@ export function Listings() {
     formData.purchase_type === 'buy_to_order' ? hotels.find(h => h.id === formData.hotel_id) : undefined,
     [hotels, formData.hotel_id, formData.purchase_type]
   )
-  
-  // Note: Room allocation now handled by Stock, not Listings
 
   // Get room groups from selected source (contract's hotel or direct hotel)
   const availableRoomGroups = useMemo(() => {
@@ -142,12 +140,7 @@ export function Listings() {
     return []
   }, [formData.purchase_type, selectedContract, selectedHotel, hotels])
 
-  // Get available stocks for selected contract and room type
-  const availableStocks = useMemo(() => {
-    if (!formData.contract_id || !formData.room_group_id) return []
-    return stocks.filter(s => s.contract_id === formData.contract_id && s.room_group_id === formData.room_group_id)
-  }, [formData.contract_id, formData.room_group_id, stocks])
-
+  // Note: Room allocations managed at contract level (Contract.room_allocations)
   // Note: Pricing handled by Rates, not Listings
 
   const columns = [
@@ -199,7 +192,6 @@ export function Listings() {
       contract_id: 0,
       hotel_id: 0,
       room_group_id: '',
-      stock_id: 0,
       purchase_type: 'inventory',
       cost_price: 0,
       selling_price: 0,
@@ -217,7 +209,6 @@ export function Listings() {
       contract_id: listing.contract_id || 0,
       hotel_id: listing.hotel_id || 0,
       room_group_id: listing.room_group_id,
-      stock_id: listing.stock_id || 0,
       purchase_type: listing.purchase_type,
       cost_price: listing.cost_price,
       selling_price: listing.selling_price,
@@ -400,6 +391,33 @@ export function Listings() {
                         </p>
                       </div>
 
+                      <div className="grid gap-2">
+                        <Label htmlFor="purchase_type">Purchase Type *</Label>
+                        <Select
+                          value={formData.purchase_type}
+                          onValueChange={(value: 'inventory' | 'buy_to_order') => setFormData({ 
+                            ...formData, 
+                            purchase_type: value,
+                            contract_id: 0,
+                            hotel_id: 0,
+                            room_group_id: '',
+                          })}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="inventory">Inventory (Pre-contracted)</SelectItem>
+                            <SelectItem value="buy_to_order">Buy to Order (On-demand)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          {formData.purchase_type === 'inventory' 
+                            ? 'Use pre-negotiated contract with committed rooms'
+                            : 'Purchase rooms on-demand after booking (no contract needed)'}
+                        </p>
+                      </div>
+
               {/* Conditional: Contract for Inventory, Hotel for Buy-to-Order */}
               {formData.purchase_type === 'inventory' ? (
                 <div className="grid gap-2">
@@ -482,60 +500,37 @@ export function Listings() {
                   </AccordionTrigger>
                   <AccordionContent>
                     <div className="space-y-4 pt-2">
-                      <div className="grid gap-2">
-                        <Label htmlFor="room_group_id">Room Type *</Label>
-                <Select
-                  value={formData.room_group_id}
-                  onValueChange={(value) => setFormData({ ...formData, room_group_id: value })}
-                  disabled={formData.purchase_type === 'inventory' ? !selectedContract : !selectedHotel}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={
-                      (formData.purchase_type === 'inventory' ? selectedContract : selectedHotel)
-                        ? "Select a room type" 
-                        : formData.purchase_type === 'inventory' ? "Select a contract first" : "Select a hotel first"
-                    } />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableRoomGroups.map((roomGroup) => (
-                      <SelectItem key={roomGroup.id} value={roomGroup.id}>
-                        {roomGroup.room_type} (Capacity: {roomGroup.capacity})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-
-                      <div className="grid gap-2">
-                        <Label htmlFor="stock_id">Stock (optional for inventory)</Label>
-                        <Select
-                          value={String(formData.stock_id || '')}
-                          onValueChange={(value) => setFormData({ ...formData, stock_id: parseInt(value) || 0 })}
-                          disabled={formData.purchase_type !== 'inventory'}
-                        >
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select an allotment (if any)" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {availableStocks.map((s) => (
-                              <SelectItem key={s.id} value={s.id.toString()}>
-                                {s.roomName} • Qty {s.quantity}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          Pricing and occupancy/board will be chosen during booking via rate plans.
-                        </p>
-                      </div>
+                       <div className="grid gap-2">
+                         <Label htmlFor="room_group_id">Room Type *</Label>
+                 <Select
+                   value={formData.room_group_id}
+                   onValueChange={(value) => setFormData({ ...formData, room_group_id: value })}
+                   disabled={formData.purchase_type === 'inventory' ? !selectedContract : !selectedHotel}
+                 >
+                   <SelectTrigger>
+                     <SelectValue placeholder={
+                       (formData.purchase_type === 'inventory' ? selectedContract : selectedHotel)
+                         ? "Select a room type" 
+                         : formData.purchase_type === 'inventory' ? "Select a contract first" : "Select a hotel first"
+                     } />
+                   </SelectTrigger>
+                   <SelectContent>
+                     {availableRoomGroups.map((roomGroup) => (
+                       <SelectItem key={roomGroup.id} value={roomGroup.id}>
+                         {roomGroup.room_type} (Capacity: {roomGroup.capacity})
+                       </SelectItem>
+                     ))}
+                   </SelectContent>
+                 </Select>
+                         <p className="text-xs text-muted-foreground">
+                           Room allocations are managed in the contract. Pricing and occupancy/board will be chosen during booking via rate plans.
+                         </p>
+               </div>
                     </div>
                   </AccordionContent>
                 </AccordionItem>
 
-                
               </Accordion>
-
-              {/* Note: Sold quantities tracked via Stock and Bookings, not Listings */}
             </div>
 
             <DialogFooter>
