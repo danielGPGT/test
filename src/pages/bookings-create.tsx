@@ -429,7 +429,7 @@ function CompactRoomCard({
 
 export function BookingsCreate() {
   const navigate = useNavigate()
-  const { bookings, tours, rates, contracts, hotels, addBooking } = useData()
+  const { bookings, tours, rates, contracts, hotels, addBooking, tourComponents } = useData()
   
   // Booking state
   const [selectedTourId, setSelectedTourId] = useState(0)
@@ -450,6 +450,48 @@ export function BookingsCreate() {
     tours.find(t => t.id === selectedTourId),
     [tours, selectedTourId]
   )
+
+  const tourHasComponents = useMemo(() => {
+    return tourComponents.filter((c: any) => c.tour_id === selectedTourId).length > 0
+  }, [tourComponents, selectedTourId])
+
+  // Auto-populate cart from tour components
+  useEffect(() => {
+    if (!selectedTour || !checkInDate || !tourHasComponents || cart.length > 0) return
+    
+    const components = tourComponents.filter((c: any) => c.tour_id === selectedTourId && c.component_type === 'accommodation')
+    
+    if (components.length > 0) {
+      toast.info(`📦 Loading ${components.length} hotel component(s) from tour package...`)
+      
+      // Auto-add components to cart
+      components.forEach((component: any) => {
+        // Calculate check-in date from tour start + component day
+        const tourStart = new Date(selectedTour.start_date)
+        const componentCheckIn = new Date(tourStart)
+        componentCheckIn.setDate(componentCheckIn.getDate() + (component.check_in_day - 1))
+        
+        // Find rates for this component
+        const componentRates = availableRates.filter(item => 
+          item.rate.room_group_id === component.room_group_id &&
+          item.hotel?.id === component.hotel_id &&
+          item.rate.board_type === component.board_type
+        )
+        
+        if (componentRates.length > 0) {
+          // Use the best margin option
+          const bestRate = componentRates.sort((a, b) => {
+            const marginA = (a as any).marginPerRoom || 0
+            const marginB = (b as any).marginPerRoom || 0
+            return marginB - marginA
+          })[0]
+          
+          // Add to cart
+          addToCart(bestRate, 1, 'double')
+        }
+      })
+    }
+  }, [selectedTour, checkInDate, tourHasComponents])
 
   const nights = useMemo(() => {
     if (!checkInDate || !checkOutDate) return 0
@@ -914,14 +956,30 @@ export function BookingsCreate() {
                         <SelectValue placeholder="Select a tour" />
                       </SelectTrigger>
                       <SelectContent>
-                        {tours.map(tour => (
-                          <SelectItem key={tour.id} value={tour.id.toString()}>
-                            {tour.name} ({tour.start_date} to {tour.end_date})
-                          </SelectItem>
-                        ))}
+                        {tours.map(tour => {
+                          const hasComponents = tourComponents.filter((c: any) => c.tour_id === tour.id).length > 0
+                          return (
+                            <SelectItem key={tour.id} value={tour.id.toString()}>
+                              {tour.name} ({tour.start_date} to {tour.end_date})
+                              {hasComponents && ' 📦'}
+                            </SelectItem>
+                          )
+                        })}
                       </SelectContent>
                     </Select>
                   </div>
+
+                  {tourHasComponents && (
+                    <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+                      <div className="flex items-center gap-2 text-sm text-blue-900">
+                        <span className="text-lg">📦</span>
+                        <div>
+                          <strong>Package Tour:</strong> This tour has {tourComponents.filter((c: any) => c.tour_id === selectedTourId).length} pre-configured component(s).
+                          <div className="text-xs mt-1">They will auto-populate your cart when you select dates.</div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
