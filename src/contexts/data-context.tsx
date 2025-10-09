@@ -1,12 +1,46 @@
-import { createContext, useContext, useState, ReactNode } from 'react'
+import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
 
 // Types
+export interface TourComponent {
+  id: number
+  tour_id: number
+  component_type: 'accommodation' | 'transfer' | 'activity' | 'meal'
+  
+  // For accommodation components
+  hotel_id?: number
+  room_group_id?: string
+  check_in_day: number              // Day number in tour (1, 2, 3, etc.)
+  nights?: number
+  board_type?: BoardType
+  
+  // Pricing (per couple - 2 people)
+  pricing_mode: 'use_contract' | 'fixed_price'
+  fixed_cost_per_couple?: number
+  fixed_sell_per_couple?: number
+  
+  // For non-accommodation components
+  service_name?: string
+  provider?: string
+  cost_per_couple?: number
+  sell_per_couple?: number
+  
+  // Package structure
+  included_in_base_price: boolean
+  optional_supplement_per_couple?: number
+  
+  // Display
+  label: string
+  description?: string
+}
+
 export interface Tour {
   id: number
   name: string
   start_date: string
   end_date: string
   description: string
+  components?: TourComponent[]
+  base_price_per_couple?: number
 }
 
 export interface RoomGroup {
@@ -57,8 +91,11 @@ export interface PaymentSchedule {
 }
 
 export interface RoomAllocation {
-  room_group_id: string // References hotel.room_groups[].id
-  quantity: number // Number of rooms allocated
+  room_group_ids: string[] // References hotel.room_groups[].id - can be multiple for shared pools (e.g., "Run of House")
+  quantity: number // Number of rooms allocated (shared across all room types in this allocation)
+  occupancy_rates?: OccupancyRate[] // Optional: specific occupancy rates for this allocation (overrides contract defaults)
+  base_rate?: number // Optional: flat rate for this allocation (overrides contract base_rate for flat rate strategy)
+  label?: string // Optional label for the allocation (e.g., "Run of House", "Suites")
 }
 
 export interface OccupancyRate {
@@ -76,6 +113,9 @@ export interface Contract {
   total_rooms: number
   base_rate: number
   currency: string
+  
+  // TOUR LINKING (optional - link contract to specific tours)
+  tour_ids?: number[] // Optional: link to specific tours
   
   // ROOM ALLOCATIONS (replaces Stock entity)
   room_allocations?: RoomAllocation[] // Allocated rooms per room type
@@ -139,10 +179,16 @@ export interface Rate {
   rate: number // Base room rate for this occupancy
   board_cost?: number // Board cost (per person per night for contract, total for buy-to-order)
   
-  // FOR BUY-TO-ORDER (estimated costs)
-  valid_from?: string // Optional validity start date
-  valid_to?: string // Optional validity end date
+  // VALIDITY & RESTRICTIONS
+  valid_from?: string // Validity start date (required for buy-to-order)
+  valid_to?: string // Validity end date (required for buy-to-order)
+  min_nights?: number // Minimum nights (overrides contract, required for buy-to-order)
+  max_nights?: number // Maximum nights (overrides contract, required for buy-to-order)
   estimated_costs?: boolean // Flag to indicate this is an estimated rate
+  
+  // SHOULDER NIGHT RATES (per occupancy)
+  pre_shoulder_rates?: number[] // Rates for nights before validity period [day-1, day-2, ...]
+  post_shoulder_rates?: number[] // Rates for nights after validity period [day+1, day+2, ...]
   
   // RATE-LEVEL COSTS (per room per night, unless specified)
   // For contract rates: optional overrides
@@ -237,6 +283,11 @@ export interface BookingRoom {
     total_cost?: number
     notes?: string
   }
+  // Conversion tracking
+  original_purchase_type?: 'buy_to_order'
+  converted_from_buy_to_order?: boolean
+  conversion_date?: string
+  conversion_notes?: string
 }
 
 export interface Booking {
@@ -260,6 +311,7 @@ export interface Booking {
 interface DataContextType {
   summary: Summary
   tours: Tour[]
+  tourComponents: TourComponent[]
   hotels: Hotel[]
   contracts: Contract[]
   rates: Rate[]
@@ -271,6 +323,9 @@ interface DataContextType {
   addTour: (tour: Omit<Tour, 'id'>) => void
   updateTour: (id: number, tour: Partial<Tour>) => void
   deleteTour: (id: number) => void
+  addTourComponent: (component: Omit<TourComponent, 'id'>) => void
+  updateTourComponent: (id: number, component: Partial<TourComponent>) => void
+  deleteTourComponent: (id: number) => void
   addHotel: (hotel: Omit<Hotel, 'id'>) => void
   updateHotel: (id: number, hotel: Partial<Hotel>) => void
   deleteHotel: (id: number) => void
@@ -297,6 +352,49 @@ interface DataContextType {
     notes?: string
   }) => void
   resetAllData: () => void
+  
+  // Buy-to-Order Conversion Functions
+  detectBuyToOrderConversions: (contract: Contract) => ConversionCandidate[]
+  convertBuyToOrderBooking: (bookingId: number, contractId: number, notes?: string) => void
+  convertBuyToOrderRoom: (bookingId: number, roomIndex: number, contractId: number, notes?: string) => boolean
+  getConversionHistory: () => ConversionHistory[]
+}
+
+export interface ConversionCandidate {
+  bookingId: number
+  customerName: string
+  customerEmail: string
+  tourName: string
+  checkInDate: string
+  checkOutDate: string
+  rooms: Array<{
+    roomName: string
+    occupancy_type: OccupancyType
+    board_type: BoardType
+    quantity: number
+    originalPrice: number
+    newContractRate: number
+    priceDifference: number
+    rateId: number
+  }>
+  totalOriginalPrice: number
+  totalNewPrice: number
+  totalSavings: number
+  canConvert: boolean
+  reason?: string
+}
+
+export interface ConversionHistory {
+  id: number
+  bookingId: number
+  customerName: string
+  contractId: number
+  contractName: string
+  conversionDate: string
+  originalPrice: number
+  newPrice: number
+  savings: number
+  notes?: string
 }
 
 const DataContext = createContext<DataContextType | undefined>(undefined)
@@ -382,8 +480,20 @@ const initialData = {
       currency: "EUR",
       // Room allocations (merged from Stock)
       room_allocations: [
-        { room_group_id: "rg-1", quantity: 60 }, // 60 Standard Double rooms
-        { room_group_id: "rg-2", quantity: 40 }  // 40 Deluxe Suite rooms
+        { 
+          room_group_ids: ["rg-1"], 
+          quantity: 60,
+          // Can optionally override occupancy rates per allocation:
+          // occupancy_rates: [
+          //   { occupancy_type: 'single', rate: 90 },
+          //   { occupancy_type: 'double', rate: 120 },
+          //   { occupancy_type: 'triple', rate: 140 }
+          // ]
+        },
+        { 
+          room_group_ids: ["rg-2"], 
+          quantity: 40
+        }
       ],
       // Occupancy pricing strategy
       pricing_strategy: "per_occupancy" as const,
@@ -631,6 +741,35 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [stocks] = useState<Stock[]>([])
   const [listings, setListingsState] = useState<Listing[]>(() => loadFromStorage(STORAGE_KEYS.listings, initialData.listings))
   const [bookings, setBookingsState] = useState<Booking[]>(() => loadFromStorage(STORAGE_KEYS.bookings, initialData.bookings))
+  const [conversionHistory, setConversionHistory] = useState<ConversionHistory[]>([])
+  const [tourComponents, setTourComponentsState] = useState<TourComponent[]>(() => loadFromStorage('tourComponents', []))
+
+  // Fix existing rates that are missing roomName or hotelName (migration)
+  useEffect(() => {
+    let needsUpdate = false
+    const updatedRates = rates.map(rate => {
+      if (!rate.roomName || !rate.hotelName) {
+        const contract = contracts.find(c => c.id === rate.contract_id)
+        const hotel = hotels.find(h => h.id === (rate.hotel_id || contract?.hotel_id))
+        const roomGroup = hotel?.room_groups.find(rg => rg.id === rate.room_group_id)
+        
+        if ((roomGroup && !rate.roomName) || (hotel && !rate.hotelName)) {
+          needsUpdate = true
+          return {
+            ...rate,
+            roomName: rate.roomName || roomGroup?.room_type || '',
+            hotelName: rate.hotelName || hotel?.name || ''
+          }
+        }
+      }
+      return rate
+    })
+    
+    if (needsUpdate) {
+      console.log('Migrating rates: adding missing roomName and hotelName')
+      setRates(updatedRates)
+    }
+  }, []) // Run once on mount
 
   // Wrapper functions that persist to localStorage
   const setTours = (data: Tour[] | ((prev: Tour[]) => Tour[])) => {
@@ -666,9 +805,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }
 
   // setStocks deprecated - no-op function for backward compatibility
-  const setStocks = (_data: Stock[] | ((prev: Stock[]) => Stock[])) => {
+  const _setStocks = (_data: Stock[] | ((prev: Stock[]) => Stock[])) => {
     console.warn('setStocks is deprecated. Stocks are now managed in Contract.room_allocations')
   }
+  // Suppress unused variable warning
+  void _setStocks
 
   const setListings = (data: Listing[] | ((prev: Listing[]) => Listing[])) => {
     setListingsState(prev => {
@@ -686,6 +827,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  const setTourComponents = (data: TourComponent[] | ((prev: TourComponent[]) => TourComponent[])) => {
+    setTourComponentsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage('tourComponents', next)
+      return next
+    })
+  }
+
   // Tour CRUD
   const addTour = (tour: Omit<Tour, 'id'>) => {
     const newTour = { ...tour, id: Math.max(...tours.map(t => t.id), 0) + 1 }
@@ -698,6 +847,22 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
   const deleteTour = (id: number) => {
     setTours(tours.filter(t => t.id !== id))
+    // Also delete all components for this tour
+    setTourComponents(tourComponents.filter(c => c.tour_id !== id))
+  }
+
+  // Tour Component CRUD
+  const addTourComponent = (component: Omit<TourComponent, 'id'>) => {
+    const newComponent = { ...component, id: Math.max(...tourComponents.map(c => c.id), 0) + 1 }
+    setTourComponents([...tourComponents, newComponent])
+  }
+
+  const updateTourComponent = (id: number, component: Partial<TourComponent>) => {
+    setTourComponents(tourComponents.map(c => c.id === id ? { ...c, ...component } : c))
+  }
+
+  const deleteTourComponent = (id: number) => {
+    setTourComponents(tourComponents.filter(c => c.id !== id))
   }
 
   // Hotel CRUD
@@ -722,6 +887,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       id: Math.max(...contracts.map(c => c.id), 0) + 1,
       hotelName: hotel?.name || ''
     }
+  console.log('addContract - Saving contract with tour_ids:', newContract.tour_ids)
     setContracts([...contracts, newContract])
     
     // AUTO-GENERATE RATES
@@ -758,32 +924,61 @@ export function DataProvider({ children }: { children: ReactNode }) {
     // For each room allocation
     const roomAllocations = contract.room_allocations || []
     roomAllocations.forEach(allocation => {
-      const roomGroup = hotel!.room_groups.find(rg => rg.id === allocation.room_group_id)
-      if (!roomGroup) return
+      // Check if this allocation has custom rates
+      const hasAllocationRates = allocation.occupancy_rates && allocation.occupancy_rates.length > 0
+      const hasAllocationBaseRate = allocation.base_rate !== undefined
       
-      // For each board option
-      const boardOptions = contract.board_options || [{ board_type: 'room_only' as BoardType, additional_cost: 0 }]
-      boardOptions.forEach(boardOption => {
-        
-        // For each occupancy
-        occupanciesToCreate.forEach(({occupancy, rate: occupancyRate}) => {
-          const newRate: Rate = {
-            id: currentId++,
-            contract_id: contract.id,
-            contractName: contract.contract_name,
-            room_group_id: allocation.room_group_id,
-            roomName: roomGroup.room_type,
-            occupancy_type: occupancy,
-            board_type: boardOption.board_type,
-            rate: occupancyRate, // Base room rate for this occupancy
-            board_cost: boardOption.additional_cost, // Per person per night
-            board_included: true, // Board from contract
-            markup_percentage: contract.markup_percentage || 0.60,
-            shoulder_markup_percentage: contract.shoulder_markup_percentage || 0.30,
-            currency: contract.currency,
+      // Determine which occupancy rates to use
+      let adjustedOccupancies = occupanciesToCreate
+      if (hasAllocationRates) {
+        // Per-occupancy strategy: Use allocation-specific occupancy rates, falling back to contract rates if not specified
+        adjustedOccupancies = occupanciesToCreate.map(({occupancy, rate: contractRate}) => {
+          // Look for allocation-specific rate for this occupancy
+          const allocationRate = allocation.occupancy_rates!.find(r => r.occupancy_type === occupancy)
+          return {
+            occupancy,
+            rate: allocationRate ? allocationRate.rate : contractRate // Use allocation rate if available, else contract rate
           }
+        })
+      } else if (hasAllocationBaseRate && contract.pricing_strategy === 'flat_rate') {
+        // Flat rate strategy: Use allocation-specific base rate for ALL occupancies
+        // Generate all possible occupancies (single, double, triple, quad) with same price
+        const allOccupancies: OccupancyType[] = ['single', 'double', 'triple', 'quad']
+        adjustedOccupancies = allOccupancies.map(occupancy => ({
+          occupancy,
+          rate: allocation.base_rate!
+        }))
+      }
+      
+      // Handle multiple room types in a shared allocation pool
+      allocation.room_group_ids.forEach(roomGroupId => {
+        const roomGroup = hotel!.room_groups.find(rg => rg.id === roomGroupId)
+        if (!roomGroup) return
+        
+        // For each board option
+        const boardOptions = contract.board_options || [{ board_type: 'room_only' as BoardType, additional_cost: 0 }]
+        boardOptions.forEach(boardOption => {
+          
+          // For each occupancy
+          adjustedOccupancies.forEach(({occupancy, rate: occupancyRate}) => {
+            const newRate: Rate = {
+              id: currentId++,
+              contract_id: contract.id,
+              contractName: contract.contract_name,
+              room_group_id: roomGroupId,
+              roomName: roomGroup.room_type,
+              occupancy_type: occupancy,
+              board_type: boardOption.board_type,
+              rate: occupancyRate, // Base room rate for this occupancy (now uses allocation override if set)
+              board_cost: boardOption.additional_cost, // Per person per night
+              board_included: true, // Board from contract
+              markup_percentage: contract.markup_percentage || 0.60,
+              shoulder_markup_percentage: contract.shoulder_markup_percentage || 0.30,
+              currency: contract.currency,
+            }
           newRates.push(newRate)
         })
+      })
       })
     })
     
@@ -807,7 +1002,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // Rate CRUD
   const addRate = (rate: Omit<Rate, 'id' | 'contractName' | 'roomName'>) => {
     const contract = contracts.find(c => c.id === rate.contract_id)
-    const hotel = hotels.find(h => h.id === contract?.hotel_id)
+    // For buy-to-order rates, get hotel directly; for contract rates, get via contract
+    const hotel = hotels.find(h => h.id === (rate.hotel_id || contract?.hotel_id))
     const roomGroup = hotel?.room_groups.find(rg => rg.id === rate.room_group_id)
     
     const newRate = { 
@@ -815,6 +1011,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       id: Math.max(...rates.map(r => r.id), 0) + 1,
       contractName: contract?.contract_name || '',
       roomName: roomGroup?.room_type || '',
+      hotelName: hotel?.name || '', // Add hotelName for buy-to-order rates
       // Inherit from contract if not specified
       currency: rate.currency || contract?.currency,
       tax_rate: rate.tax_rate !== undefined ? rate.tax_rate : contract?.tax_rate,
@@ -826,7 +1023,8 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setRates(rates.map(r => {
       if (r.id === id) {
         const contract = contracts.find(c => c.id === (rate.contract_id || r.contract_id))
-        const hotel = hotels.find(h => h.id === contract?.hotel_id)
+        // For buy-to-order rates, get hotel directly; for contract rates, get via contract
+        const hotel = hotels.find(h => h.id === (rate.hotel_id || r.hotel_id || contract?.hotel_id))
         const roomGroup = hotel?.room_groups.find(rg => rg.id === (rate.room_group_id || r.room_group_id))
         
         return { 
@@ -834,6 +1032,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           ...rate,
           contractName: contract?.contract_name || r.contractName,
           roomName: roomGroup?.room_type || r.roomName,
+          hotelName: hotel?.name || r.hotelName || '', // Add hotelName for buy-to-order rates
         }
       }
       return r
@@ -956,7 +1155,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
 
         // Check availability from contract allocations
         if (room.purchase_type === 'inventory') {
-          const allocation = contract.room_allocations?.find(a => a.room_group_id === rate.room_group_id)
+          const allocation = contract.room_allocations?.find(a => a.room_group_ids.includes(rate.room_group_id))
           
           if (allocation) {
             // Calculate already booked rooms for this rate
@@ -986,7 +1185,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       // Check availability for inventory items (from contract allocations)
       if (listing.purchase_type === 'inventory' && listing.contract_id) {
         const contract = contracts.find(c => c.id === listing.contract_id)
-        const allocation = contract?.room_allocations?.find(a => a.room_group_id === listing.room_group_id)
+        const allocation = contract?.room_allocations?.find(a => a.room_group_ids.includes(listing.room_group_id))
         
         if (allocation) {
           const sold = bookings
@@ -1040,7 +1239,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // Record purchase details for buy-to-order bookings
   const recordPurchaseDetails = (
     bookingId: number, 
-    purchaseDetails: {
+    _purchaseDetails: {
       assigned_to: string
       hotel_contact: string
       hotel_confirmation: string
@@ -1051,7 +1250,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const booking = bookings.find(b => b.id === bookingId)
     if (!booking) return
 
-    // TODO: Update for new room-based structure
+    // TODO: Update for new room-based structure to use _purchaseDetails
     setBookings(bookings.map(b => 
       b.id === bookingId 
         ? { ...b, status: 'confirmed' as const }
@@ -1083,13 +1282,219 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setRates(initialData.rates)
       setListings(initialData.listings)
       setBookings(initialData.bookings)
+      setConversionHistory([])
       console.log('All data reset to initial state')
     }
+  }
+
+  // Buy-to-Order Conversion Functions
+  const detectBuyToOrderConversions = (contract: Contract): ConversionCandidate[] => {
+    const candidates: ConversionCandidate[] = []
+    
+    // Find all buy-to-order bookings that could potentially be converted
+    const buyToOrderBookings = bookings.filter(booking => 
+      booking.status !== 'cancelled' &&
+      booking.rooms?.some(room => room.purchase_type === 'buy_to_order')
+    )
+    
+    for (const booking of buyToOrderBookings) {
+      const conversionRooms: ConversionCandidate['rooms'] = []
+      let totalOriginalPrice = 0
+      let totalNewPrice = 0
+      
+      for (const room of booking.rooms || []) {
+        if (room.purchase_type !== 'buy_to_order') continue
+        
+        // Find matching rate in the new contract
+        const matchingRate = rates.find(rate => 
+          rate.contract_id === contract.id &&
+          rate.room_group_id === room.rate_id.toString() &&
+          rate.occupancy_type === room.occupancy_type &&
+          rate.board_type === room.board_type
+        )
+        
+        if (matchingRate) {
+          // Calculate new price using the contract rate
+          const newPrice = matchingRate.rate * getNights(booking.check_in_date, booking.check_out_date)
+          const priceDifference = room.price_per_room - newPrice
+          
+          conversionRooms.push({
+            roomName: room.roomName,
+            occupancy_type: room.occupancy_type,
+            board_type: room.board_type,
+            quantity: room.quantity,
+            originalPrice: room.price_per_room,
+            newContractRate: newPrice,
+            priceDifference,
+            rateId: matchingRate.id
+          })
+          
+          totalOriginalPrice += room.price_per_room * room.quantity
+          totalNewPrice += newPrice * room.quantity
+        }
+      }
+      
+      if (conversionRooms.length > 0) {
+        const totalSavings = totalOriginalPrice - totalNewPrice
+        candidates.push({
+          bookingId: booking.id,
+          customerName: booking.customer_name,
+          customerEmail: booking.customer_email,
+          tourName: booking.tourName,
+          checkInDate: booking.check_in_date,
+          checkOutDate: booking.check_out_date,
+          rooms: conversionRooms,
+          totalOriginalPrice,
+          totalNewPrice,
+          totalSavings,
+          canConvert: true,
+          reason: totalSavings > 0 ? 
+            `Can save €${totalSavings.toFixed(2)} and convert to guaranteed inventory` :
+            `Can convert to guaranteed inventory (rate difference: €${Math.abs(totalSavings).toFixed(2)})`
+        })
+      }
+    }
+    
+    return candidates
+  }
+
+  const convertBuyToOrderBooking = (bookingId: number, contractId: number, notes?: string) => {
+    const booking = bookings.find(b => b.id === bookingId)
+    const contract = contracts.find(c => c.id === contractId)
+    
+    if (!booking || !contract) return
+    
+    // Update booking rooms to use contract inventory instead of buy-to-order
+    const updatedRooms = booking.rooms?.map(room => {
+      if (room.purchase_type === 'buy_to_order') {
+        return {
+          ...room,
+          purchase_type: 'inventory' as const,
+          original_purchase_type: 'buy_to_order' as const,
+          converted_from_buy_to_order: true,
+          conversion_date: new Date().toISOString(),
+          conversion_notes: notes
+        }
+      }
+      return room
+    })
+    
+    // Update the booking
+    setBookings(bookings.map(b => 
+      b.id === bookingId 
+        ? { ...b, rooms: updatedRooms }
+        : b
+    ))
+    
+    // Record conversion history
+    const totalOriginalPrice = booking.rooms?.reduce((sum, room) => 
+      room.purchase_type === 'buy_to_order' ? sum + room.total_price : sum, 0
+    ) || 0
+    
+    const totalNewPrice = updatedRooms?.reduce((sum, room) => 
+      room.original_purchase_type === 'buy_to_order' ? sum + room.total_price : sum, 0
+    ) || 0
+    
+    const conversionRecord: ConversionHistory = {
+      id: Date.now(),
+      bookingId,
+      customerName: booking.customer_name,
+      contractId,
+      contractName: contract.contract_name,
+      conversionDate: new Date().toISOString(),
+      originalPrice: totalOriginalPrice,
+      newPrice: totalNewPrice,
+      savings: totalOriginalPrice - totalNewPrice,
+      notes
+    }
+    
+    setConversionHistory(prev => [...prev, conversionRecord])
+  }
+
+  const convertBuyToOrderRoom = (bookingId: number, roomIndex: number, contractId: number, notes?: string): boolean => {
+    const booking = bookings.find(b => b.id === bookingId)
+    const contract = contracts.find(c => c.id === contractId)
+    
+    if (!booking || !contract) {
+      console.error('Booking or contract not found', { bookingId, contractId })
+      return false
+    }
+    
+    if (!booking.rooms || roomIndex >= booking.rooms.length) {
+      console.error('Invalid room index', { roomIndex, totalRooms: booking.rooms?.length })
+      return false
+    }
+    
+    const room = booking.rooms[roomIndex]
+    
+    if (room.purchase_type !== 'buy_to_order') {
+      console.error('Room is not buy-to-order', { roomType: room.purchase_type })
+      return false
+    }
+    
+    if (room.converted_from_buy_to_order) {
+      console.error('Room already converted')
+      return false
+    }
+    
+    // Create updated rooms array with the specific room converted
+    const updatedRooms = booking.rooms.map((r, idx) => {
+      if (idx === roomIndex) {
+        return {
+          ...r,
+          purchase_type: 'inventory' as const,
+          original_purchase_type: 'buy_to_order' as const,
+          converted_from_buy_to_order: true,
+          conversion_date: new Date().toISOString(),
+          conversion_notes: notes,
+          contractName: contract.contract_name // Update contract name for display
+        }
+      }
+      return r
+    })
+    
+    // Update the booking with new rooms array
+    setBookings(prev => prev.map(b => 
+      b.id === bookingId 
+        ? { ...b, rooms: updatedRooms }
+        : b
+    ))
+    
+    // Record conversion history
+    const conversionRecord: ConversionHistory = {
+      id: Date.now(),
+      bookingId,
+      customerName: booking.customer_name,
+      contractId,
+      contractName: contract.contract_name,
+      conversionDate: new Date().toISOString(),
+      originalPrice: room.total_price,
+      newPrice: room.total_price, // Price stays the same!
+      savings: 0, // No price change
+      notes
+    }
+    
+    setConversionHistory(prev => [...prev, conversionRecord])
+    
+    console.log('Room converted successfully', { bookingId, roomIndex, contractId })
+    return true
+  }
+
+  const getConversionHistory = (): ConversionHistory[] => {
+    return conversionHistory
+  }
+
+  // Helper function to calculate nights
+  const getNights = (checkIn: string, checkOut: string): number => {
+    const start = new Date(checkIn)
+    const end = new Date(checkOut)
+    return Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
   }
 
   const value: DataContextType = {
     summary: initialData.summary,
     tours,
+    tourComponents,
     hotels,
     contracts,
     rates,
@@ -1101,6 +1506,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addTour,
     updateTour,
     deleteTour,
+    addTourComponent,
+    updateTourComponent,
+    deleteTourComponent,
     addHotel,
     updateHotel,
     deleteHotel,
@@ -1121,6 +1529,10 @@ export function DataProvider({ children }: { children: ReactNode }) {
     cancelBooking,
     recordPurchaseDetails,
     resetAllData,
+    detectBuyToOrderConversions,
+    convertBuyToOrderBooking,
+    convertBuyToOrderRoom,
+    getConversionHistory,
   }
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
@@ -17,7 +18,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { AlertTriangle, Ban, Receipt, Coffee, Calendar as CalendarIcon, DollarSign as DollarIcon, Trash2, Bed, Percent, Users } from 'lucide-react'
+import { AlertTriangle, Ban, Receipt, Coffee, Calendar as CalendarIcon, DollarSign as DollarIcon, Trash2, Bed, Percent } from 'lucide-react'
 import { BoardType, BoardOption, AttritionStage, CancellationStage, PaymentSchedule, RoomAllocation, RoomGroup, OccupancyRate } from '@/contexts/data-context'
 import { BOARD_TYPE_LABELS } from '@/lib/pricing'
 import { toast } from 'sonner'
@@ -31,6 +32,7 @@ interface ContractFormProps {
     total_rooms: number
     base_rate: number
     currency: string
+    tour_ids?: number[]
     room_allocations?: RoomAllocation[]
     pricing_strategy?: 'per_occupancy' | 'flat_rate'
     occupancy_rates?: OccupancyRate[]
@@ -54,6 +56,7 @@ interface ContractFormProps {
   }
   setFormData: (data: any) => void
   hotels: any[]
+  tours: any[]
   selectedHotel?: any
   boardTypeInput: BoardType
   setBoardTypeInput: (value: BoardType) => void
@@ -84,6 +87,7 @@ export function ContractForm({
   formData,
   setFormData,
   hotels,
+  tours,
   selectedHotel,
   boardTypeInput,
   setBoardTypeInput,
@@ -109,6 +113,18 @@ export function ContractForm({
   setPaymentAmountInput,
   isEditing = false
 }: ContractFormProps) {
+  // State for room allocation form
+  const [selectedRoomTypes, setSelectedRoomTypes] = useState<string[]>([])
+  const [allocationLabel, setAllocationLabel] = useState('')
+  const [allocationQty, setAllocationQty] = useState('')
+  const [allocationSingleRate, setAllocationSingleRate] = useState('')
+  const [allocationDoubleRate, setAllocationDoubleRate] = useState('')
+  const [allocationTripleRate, setAllocationTripleRate] = useState('')
+  const [allocationQuadRate, setAllocationQuadRate] = useState('')
+  
+  // State for flat rate allocation base rate
+  const [allocationBaseRate, setAllocationBaseRate] = useState('')
+  
   return (
     <div className="grid gap-4 py-4">
       {!isEditing && (
@@ -143,6 +159,51 @@ export function ContractForm({
       </div>
 
       <div className="grid gap-2">
+        <Label>Link to Tours (Optional)</Label>
+        <div className="border rounded-lg p-3 max-h-40 overflow-y-auto space-y-2">
+          {tours.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No tours available</div>
+          ) : (
+            <>
+              {tours.map(tour => (
+                <div key={tour.id} className="flex items-center space-x-2">
+                  <Checkbox
+                    id={`contract-tour-${tour.id}`}
+                    checked={formData.tour_ids?.includes(tour.id) || false}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        setFormData({ 
+                          ...formData, 
+                          tour_ids: [...(formData.tour_ids || []), tour.id] 
+                        })
+                      } else {
+                        setFormData({ 
+                          ...formData, 
+                          tour_ids: (formData.tour_ids || []).filter(id => id !== tour.id) 
+                        })
+                      }
+                    }}
+                  />
+                  <label
+                    htmlFor={`contract-tour-${tour.id}`}
+                    className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer flex-1"
+                  >
+                    {tour.name}
+                    <span className="text-xs text-muted-foreground ml-2">
+                      ({tour.start_date} - {tour.end_date})
+                    </span>
+                  </label>
+                </div>
+              ))}
+              <p className="text-xs text-muted-foreground mt-2 pt-2 border-t">
+                💡 Leave empty to make this contract available for all tours
+              </p>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+      <div className="grid gap-2">
         <Label htmlFor="start_date">Start Date *</Label>
         <Input
           id="start_date"
@@ -160,6 +221,7 @@ export function ContractForm({
           value={formData.end_date}
           onChange={(e) => setFormData({ ...formData, end_date: e.target.value })}
         />
+      
       </div>
 
       <div className="grid gap-2">
@@ -173,7 +235,7 @@ export function ContractForm({
       </div>
 
       <div className="grid gap-2">
-        <Label htmlFor="base_rate">Base Rate (Reference)</Label>
+        <Label htmlFor="base_rate">Base Nightly Rate (Reference)</Label>
         <Input
           id="base_rate"
           type="number"
@@ -181,9 +243,8 @@ export function ContractForm({
           value={formData.base_rate}
           onChange={(e) => setFormData({ ...formData, base_rate: parseFloat(e.target.value) || 0 })}
         />
-        <p className="text-xs text-muted-foreground">
-          Default/reference rate (will be overridden by occupancy rates if using per-occupancy pricing)
-        </p>
+
+      </div>
       </div>
 
       <div className="grid gap-2">
@@ -332,12 +393,23 @@ export function ContractForm({
               {(formData.room_allocations || []).length > 0 && (
                 <div className="space-y-2">
                   {(formData.room_allocations || []).map((allocation: RoomAllocation, index: number) => {
-                    const roomGroup = selectedHotel?.room_groups?.find((rg: RoomGroup) => rg.id === allocation.room_group_id)
+                    const roomGroups = allocation.room_group_ids.map(id => 
+                      selectedHotel?.room_groups?.find((rg: RoomGroup) => rg.id === id)
+                    ).filter(Boolean)
+                    
                     return (
-                      <div key={index} className="flex items-center justify-between p-2 bg-muted rounded-md border">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline">{roomGroup?.room_type || allocation.room_group_id}</Badge>
-                          <span className="text-sm font-medium">{allocation.quantity} rooms</span>
+                      <div key={index} className="p-3 bg-muted rounded-md border">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {allocation.label && (
+                              <Badge variant="default" className="text-xs">{allocation.label}</Badge>
+                            )}
+                            {roomGroups.map((rg, idx) => (
+                              <Badge key={idx} variant="outline" className="text-xs">
+                                {rg?.room_type}
+                              </Badge>
+                            ))}
+                            <span className="text-sm font-medium">{allocation.quantity} rooms (shared)</span>
                         </div>
                         <Button
                           type="button"
@@ -351,6 +423,28 @@ export function ContractForm({
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
+                        </div>
+                        
+                        {/* Show occupancy rates */}
+                        {allocation.occupancy_rates && allocation.occupancy_rates.length > 0 ? (
+                          <div className="flex gap-2 flex-wrap text-xs">
+                            {allocation.occupancy_rates.map((occRate, idx) => (
+                              <Badge key={idx} variant="secondary" className="text-xs">
+                                {occRate.occupancy_type}: {occRate.rate} {formData.currency}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : allocation.base_rate !== undefined ? (
+                          <div className="text-xs">
+                            <Badge variant="secondary" className="text-xs bg-green-100 text-green-800">
+                              Base Rate: {allocation.base_rate} {formData.currency}
+                            </Badge>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-muted-foreground">
+                            Using contract default rates
+                          </div>
+                        )}
                       </div>
                     )
                   })}
@@ -358,38 +452,218 @@ export function ContractForm({
               )}
               
               {selectedHotel && selectedHotel.room_groups && selectedHotel.room_groups.length > 0 && (
-                <div className="p-3 bg-background rounded-md border border-dashed space-y-2">
+                <div className="p-3 bg-background rounded-md border border-dashed space-y-3">
                   <p className="text-sm font-medium">Add Room Allocation</p>
-                  <div className="flex gap-2">
-                    <Select
-                      onValueChange={(value) => {
-                        const quantity = prompt('How many rooms of this type?')
-                        if (quantity && parseInt(quantity) > 0) {
-                          const newAllocation: RoomAllocation = {
-                            room_group_id: value,
-                            quantity: parseInt(quantity)
+                  
+                  {/* Multi-room type allocation form */}
+                  <div className="space-y-2 p-3 bg-muted/30 rounded-md">
+                    <Label className="text-xs">Room Types (select one or more for shared pool)</Label>
+                    <div className="flex flex-wrap gap-2">
+                      {selectedHotel.room_groups.map((rg: RoomGroup) => {
+                        const alreadyUsed = formData.room_allocations?.some(a => 
+                          a.room_group_ids.includes(rg.id)
+                        )
+                        const isSelected = selectedRoomTypes.includes(rg.id)
+                        
+                        return (
+                          <div key={rg.id} className="flex items-center gap-1.5">
+                            <Checkbox
+                              id={`room-type-${rg.id}`}
+                              checked={isSelected}
+                              disabled={alreadyUsed}
+                              onCheckedChange={(checked) => {
+                                if (checked) {
+                                  setSelectedRoomTypes([...selectedRoomTypes, rg.id])
+                                } else {
+                                  setSelectedRoomTypes(selectedRoomTypes.filter(id => id !== rg.id))
+                                }
+                              }}
+                            />
+                            <label
+                              htmlFor={`room-type-${rg.id}`}
+                              className={`text-xs cursor-pointer ${alreadyUsed ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            >
+                              {rg.room_type}
+                            </label>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    
+                    <div className="grid gap-3 pt-2">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <Label className="text-xs">Label (optional)</Label>
+                          <Input
+                            type="text"
+                            placeholder="e.g., Run of House"
+                            value={allocationLabel}
+                            onChange={(e) => setAllocationLabel(e.target.value)}
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <Label className="text-xs">Quantity *</Label>
+                          <Input
+                            type="number"
+                            min={1}
+                            placeholder="Rooms"
+                            value={allocationQty}
+                            onChange={(e) => setAllocationQty(e.target.value)}
+                            className="h-8 text-xs"
+                          />
+                        </div>
+                      </div>
+                      
+                      {/* Occupancy Rates (optional overrides) */}
+                      {formData.pricing_strategy === 'per_occupancy' && formData.occupancy_rates && formData.occupancy_rates.length > 0 && (
+                        <div className="border-t pt-2">
+                          <Label className="text-xs mb-2 block">Occupancy Rates (optional - overrides contract defaults)</Label>
+                          <div className="grid grid-cols-2 gap-2">
+                            {formData.occupancy_rates.map((occRate) => {
+                              const defaultRate = occRate.rate
+                              let value = ''
+                              let setValue = (_val: string) => {}
+                              
+                              switch(occRate.occupancy_type) {
+                                case 'single':
+                                  value = allocationSingleRate
+                                  setValue = setAllocationSingleRate
+                                  break
+                                case 'double':
+                                  value = allocationDoubleRate
+                                  setValue = setAllocationDoubleRate
+                                  break
+                                case 'triple':
+                                  value = allocationTripleRate
+                                  setValue = setAllocationTripleRate
+                                  break
+                                case 'quad':
+                                  value = allocationQuadRate
+                                  setValue = setAllocationQuadRate
+                                  break
+                              }
+                              
+                              const label = occRate.occupancy_type === 'single' ? 'Single (1p)' :
+                                          occRate.occupancy_type === 'double' ? 'Double (2p)' :
+                                          occRate.occupancy_type === 'triple' ? 'Triple (3p)' : 'Quad (4p)'
+                              
+                              return (
+                                <div key={occRate.occupancy_type}>
+                                  <Label className="text-[10px] text-muted-foreground">{label}</Label>
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    min={0}
+                                    placeholder={`Default: ${defaultRate}`}
+                                    value={value}
+                                    onChange={(e) => setValue(e.target.value)}
+                                    className="h-7 text-xs"
+                                  />
+                                </div>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      )}
+                      
+                      {/* Flat Rate Base Rate (optional override) */}
+                      {formData.pricing_strategy === 'flat_rate' && (
+                        <div className="border-t pt-2">
+                          <Label className="text-xs mb-2 block">Base Rate (optional - overrides contract default)</Label>
+                          <div className="space-y-1">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min={0}
+                              placeholder={`${formData.base_rate || 0}`}
+                              value={allocationBaseRate}
+                              onChange={(e) => setAllocationBaseRate(e.target.value)}
+                              className="h-8 text-xs"
+                            />
+                            <div className="text-[9px] text-muted-foreground">
+                              💡 Leave empty to use contract default: {formData.base_rate || 0} {formData.currency}/night
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="default"
+                      className="w-full h-8 text-xs"
+                      onClick={() => {
+                        if (selectedRoomTypes.length === 0) {
+                          toast.error('Please select at least one room type')
+                          return
+                        }
+                        
+                        const qty = parseInt(allocationQty)
+                        if (!qty || qty <= 0) {
+                          toast.error('Please enter a valid quantity')
+                          return
+                        }
+                        
+                        const label = allocationLabel.trim() || undefined
+                        
+                        // Build occupancy rates array if any were specified (for per-occupancy strategy)
+                        const occupancyRates: OccupancyRate[] = []
+                        if (formData.pricing_strategy === 'per_occupancy') {
+                          if (allocationSingleRate) {
+                            occupancyRates.push({ occupancy_type: 'single', rate: parseFloat(allocationSingleRate) })
                           }
+                          if (allocationDoubleRate) {
+                            occupancyRates.push({ occupancy_type: 'double', rate: parseFloat(allocationDoubleRate) })
+                          }
+                          if (allocationTripleRate) {
+                            occupancyRates.push({ occupancy_type: 'triple', rate: parseFloat(allocationTripleRate) })
+                          }
+                          if (allocationQuadRate) {
+                            occupancyRates.push({ occupancy_type: 'quad', rate: parseFloat(allocationQuadRate) })
+                          }
+                        }
+                        
+                        // Build allocation object based on pricing strategy
+                          const newAllocation: RoomAllocation = {
+                          room_group_ids: selectedRoomTypes,
+                          quantity: qty,
+                          label,
+                          // For per-occupancy strategy: use occupancy_rates
+                          ...(formData.pricing_strategy === 'per_occupancy' && {
+                            occupancy_rates: occupancyRates.length > 0 ? occupancyRates : undefined
+                          }),
+                          // For flat rate strategy: use base_rate
+                          ...(formData.pricing_strategy === 'flat_rate' && allocationBaseRate && {
+                            base_rate: parseFloat(allocationBaseRate)
+                          })
+                        }
+                        
                           setFormData({
                             ...formData,
                             room_allocations: [...(formData.room_allocations || []), newAllocation]
                           })
-                        }
+                        
+                        // Clear form
+                        setSelectedRoomTypes([])
+                        setAllocationLabel('')
+                        setAllocationQty('')
+                        setAllocationSingleRate('')
+                        setAllocationDoubleRate('')
+                        setAllocationTripleRate('')
+                        setAllocationQuadRate('')
+                        setAllocationBaseRate('')
+                        
+                        toast.success('Allocation added')
                       }}
                     >
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder="Select room type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {selectedHotel.room_groups.map((rg: RoomGroup) => (
-                          <SelectItem key={rg.id} value={rg.id}>
-                            {rg.room_type} (Capacity: {rg.capacity})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                      Add Allocation
+                    </Button>
                   </div>
+                  
                   <p className="text-xs text-muted-foreground">
-                    Example: 10× Standard Double, 5× Deluxe Suite
+                    💡 Select multiple room types to create a shared pool (e.g., "50 rooms - Double/Twin"). The quantity will be shared across all selected types.
                   </p>
                 </div>
               )}

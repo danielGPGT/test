@@ -83,17 +83,12 @@ export function Rates() {
         const contract = contracts.find((c) => c.id === rate.contract_id);
         if (!contract) return { ...rate, fullCost: rate.rate };
 
-        // Determine board cost from contract and board_type
-        const boardOption = contract.board_options?.find(
-          (o) => o.board_type === rate.board_type
-        );
-        const boardCost = boardOption?.additional_cost || 0;
-
-        // Saved rate is total (base + board). Extract base portion
-        const basePortion = Math.max(0, rate.rate - boardCost);
+        // Use stored board cost from rate, or fallback to contract
+        const boardCost = rate.board_cost !== undefined ? rate.board_cost : 
+          contract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0;
 
         const breakdown = calculatePriceBreakdown(
-          basePortion,
+          rate.rate, // Use stored base rate directly
           contract,
           "double",
           1,
@@ -161,18 +156,18 @@ export function Rates() {
     }
 
     // Create single MVP rate (assumed double occupancy)
-    // Calculate total rate including board cost
+    // Store base rate only, board cost separately
     const boardOption = selectedContract?.board_options?.find(
       (o) => o.board_type === formData.board_type
     );
-    const totalRate = formData.rate + (boardOption?.additional_cost || 0);
 
     addRate({
       contract_id: formData.contract_id,
       room_group_id: formData.room_group_id,
       occupancy_type: "double",
       board_type: formData.board_type,
-      rate: totalRate,
+      rate: formData.rate, // Store base rate only
+      board_cost: boardOption?.additional_cost || 0, // Store board cost separately
     });
     toast.success("Rate created successfully");
 
@@ -192,18 +187,12 @@ export function Rates() {
   const handleEdit = (rate: Rate) => {
     setEditingRate(rate);
 
-    // Calculate base rate by subtracting board cost
-    const contract = contracts.find((c) => c.id === rate.contract_id);
-    const boardOption = contract?.board_options?.find(
-      (o) => o.board_type === rate.board_type
-    );
-    const baseRate = rate.rate - (boardOption?.additional_cost || 0);
-
+    // Use stored base rate directly (no need to subtract board cost)
     setFormData({
-      contract_id: rate.contract_id,
+      contract_id: rate.contract_id || 0,
       room_group_id: rate.room_group_id,
       board_type: rate.board_type,
-      rate: baseRate,
+      rate: rate.rate, // Use stored base rate directly
       single_supplement: 0,
       offer_single_rate: false,
       triple_rate: 0,
@@ -229,18 +218,18 @@ export function Rates() {
       return;
     }
 
-    // Calculate total rate including board cost
+    // Store base rate only, board cost separately
     const boardOption = selectedContract?.board_options?.find(
       (o) => o.board_type === formData.board_type
     );
-    const totalRate = formData.rate + (boardOption?.additional_cost || 0);
 
     updateRate(editingRate.id, {
       contract_id: formData.contract_id,
       room_group_id: formData.room_group_id,
       occupancy_type: editingRate.occupancy_type, // Keep existing occupancy
       board_type: formData.board_type,
-      rate: totalRate,
+      rate: formData.rate, // Store base rate only
+      board_cost: boardOption?.additional_cost || 0, // Store board cost separately
     });
     toast.success("Rate updated successfully");
     setIsEditOpen(false);

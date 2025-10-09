@@ -34,7 +34,7 @@ import {
 } from "@/components/ui/accordion"
 
 export function Contracts() {
-  const { contracts, hotels, addContract, updateContract, deleteContract } = useData()
+  const { contracts, hotels, tours, addContract, updateContract, deleteContract } = useData()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editingContract, setEditingContract] = useState<Contract | null>(null)
@@ -46,6 +46,7 @@ export function Contracts() {
     total_rooms: 0,
     base_rate: 0,
     currency: 'EUR',
+    tour_ids: [] as number[],
     days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
     min_nights: 1,
     max_nights: 14,
@@ -113,6 +114,8 @@ export function Contracts() {
       return
     }
     
+    // Create the contract
+    console.log('Creating contract with tour_ids:', formData.tour_ids)
     addContract(formData)
     toast.success('Contract created successfully')
     setIsCreateOpen(false)
@@ -124,6 +127,7 @@ export function Contracts() {
       total_rooms: 0,
       base_rate: 0,
       currency: 'EUR',
+      tour_ids: [],
       days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
       min_nights: 1,
       max_nights: 14,
@@ -163,6 +167,7 @@ export function Contracts() {
       total_rooms: contract.total_rooms,
       base_rate: contract.base_rate,
       currency: contract.currency,
+      tour_ids: contract.tour_ids || [],
       days_of_week: contract.days_of_week || { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
       min_nights: contract.min_nights ?? 1,
       max_nights: contract.max_nights ?? 14,
@@ -195,6 +200,7 @@ export function Contracts() {
         total_rooms: 0,
         base_rate: 0,
         currency: 'EUR',
+        tour_ids: [],
         days_of_week: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: true, sun: true },
         min_nights: 1,
         max_nights: 14,
@@ -273,6 +279,45 @@ export function Contracts() {
                   value={formData.contract_name}
                   onChange={(e) => setFormData({ ...formData, contract_name: e.target.value })}
                 />
+              </div>
+              <div className="grid gap-2">
+                <Label>Link to Tours (Optional)</Label>
+                <div className="border rounded-lg p-3 space-y-2">
+                  {tours.length === 0 ? (
+                    <div className="text-sm text-muted-foreground">No tours available</div>
+                  ) : (
+                    tours.map(tour => (
+                      <div key={tour.id} className="flex items-center space-x-2">
+                        <Checkbox
+                          id={`tour-${tour.id}`}
+                          checked={formData.tour_ids?.includes(tour.id) || false}
+                          onCheckedChange={(checked) => {
+                            if (checked) {
+                              setFormData({ 
+                                ...formData, 
+                                tour_ids: [...(formData.tour_ids || []), tour.id] 
+                              })
+                            } else {
+                              setFormData({ 
+                                ...formData, 
+                                tour_ids: (formData.tour_ids || []).filter(id => id !== tour.id) 
+                              })
+                            }
+                          }}
+                        />
+                        <label
+                          htmlFor={`tour-${tour.id}`}
+                          className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                        >
+                          {tour.name} ({tour.start_date} - {tour.end_date})
+                        </label>
+                      </div>
+                    ))
+                  )}
+                  <p className="text-xs text-muted-foreground mt-2">
+                    💡 Leave empty to make this contract available for all tours
+                  </p>
+                </div>
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="start_date">Start Date *</Label>

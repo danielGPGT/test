@@ -35,13 +35,10 @@ interface NavItem {
 const navItems: NavItem[] = [
   { title: "Dashboard", icon: "dashboard", route: "/" },
   { title: "Tours", icon: "calendar", route: "/tours" },
-  { title: "Hotels", icon: "building", route: "/hotels" },
-  { title: "Contracts", icon: "file-text", route: "/contracts" },
-  { title: "Rates", icon: "dollar-sign", route: "/rates" },
   { title: "Inventory Setup", icon: "warehouse", route: "/inventory" },
-  { title: "Listings", icon: "list", route: "/listings" },
-  { title: "Bookings (Old)", icon: "shopping-cart", route: "/bookings" },
-  { title: "Bookings (New)", icon: "shopping-bag", route: "/bookings-new" },
+  { title: "Create Booking", icon: "shopping-cart", route: "/bookings/create" },
+  { title: "Bookings", icon: "shopping-bag", route: "/bookings" },
+
   { title: "Reports", icon: "bar-chart", route: "/reports" }
 ]
 

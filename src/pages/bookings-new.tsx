@@ -1,4 +1,5 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { DataTable } from '@/components/ui/data-table'
 import { Button } from '@/components/ui/button'
 import { BOARD_TYPE_LABELS } from '@/lib/pricing'
@@ -20,11 +21,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useData, Booking, OccupancyType, Rate, Contract, BookingRoom } from '@/contexts/data-context'
-import { Plus, ShoppingCart, Trash2, Calendar, Users, Info, Check, X } from 'lucide-react'
+import { Plus, ShoppingCart, Trash2, Calendar, Info, Check, Building2, DoorOpen, TrendingUp, DollarSign, Percent, Package } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
 import { formatCurrency } from '@/lib/utils'
 import { calculatePriceBreakdown } from '@/lib/pricing'
 import { toast } from 'sonner'
@@ -40,102 +47,252 @@ interface CartItem {
   totalPrice: number // quantity × pricePerRoom
 }
 
-// Rate Card Component (to avoid hooks in map)
-function RateCard({ 
-  rateItem, 
+// Compact Room Rate Card - Shows contracts for a room type
+function CompactRoomCard({ 
+  roomGroup, 
   nights, 
   onAddToCart 
 }: { 
-  rateItem: { rate: Rate; contract: Contract; available: number; hotel: any }
+  roomGroup: {
+    roomGroupId: string
+    roomName: string
+    rates: Array<{ rate: Rate; contract: Contract; available: number; hotel: any }>
+    totalAvailable: number
+    minPrice: number
+    maxMargin: number
+  }
   nights: number
-  onAddToCart: (quantity: number, occupancy: OccupancyType) => void
+  onAddToCart: (rateItem: any, quantity: number, occupancy: OccupancyType) => void
 }) {
-  const { rate, contract, available, hotel } = rateItem
-  const [selectedQty, setSelectedQty] = useState(1)
-  // Start with the rate's default occupancy, but allow user to change it
-  const [selectedOcc, setSelectedOcc] = useState<OccupancyType>(rate.occupancy_type)
+  // Get available occupancy types from rates
+  const availableOccupancies = useMemo(() => {
+    const occupancies = new Set<OccupancyType>()
+    roomGroup.rates.forEach(r => occupancies.add(r.rate.occupancy_type))
+    return Array.from(occupancies).sort()
+  }, [roomGroup.rates])
   
-  // Calculate price preview based on selected occupancy
-  const boardCost = contract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0
-  const baseRate = rate.rate - boardCost
-  const breakdown = calculatePriceBreakdown(baseRate, contract, selectedOcc, nights, boardCost)
-  const pricePerRoom = breakdown.totalCost * nights
-  const totalPrice = pricePerRoom * selectedQty
+  const [selectedQty, setSelectedQty] = useState(1)
+  const [selectedOcc, setSelectedOcc] = useState<OccupancyType>(availableOccupancies[0] || 'double')
+  const [selectedRateId, setSelectedRateId] = useState<number | undefined>(undefined)
+  
+  // Calculate contract options based on selected occupancy
+  const contractOptions = useMemo(() => {
+    return roomGroup.rates
+      .filter(rateItem => rateItem.rate.occupancy_type === selectedOcc)
+      .map(rateItem => {
+        const { rate, contract } = rateItem
+        const boardCost = contract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0
+        const baseRate = rate.rate - boardCost
+        const breakdown = calculatePriceBreakdown(baseRate, contract, selectedOcc, nights, boardCost)
+        
+        // breakdown.totalCost already includes all nights - don't multiply again!
+        const costPerRoom = breakdown.totalCost
+        const sellPerRoom = costPerRoom * 1.6
+        const marginPerRoom = sellPerRoom - costPerRoom
+        const marginPercent = ((marginPerRoom / costPerRoom) * 100)
+        
+        return {
+          ...rateItem,
+          costPerRoom,
+          sellPerRoom,
+          marginPerRoom,
+          marginPercent,
+          commissionRate: contract.supplier_commission_rate || 0
+        }
+      })
+      .sort((a, b) => b.marginPerRoom - a.marginPerRoom)
+  }, [roomGroup.rates, nights, selectedOcc])
+  
+  // Set default selected rate when contract options change or occupancy changes
+  useEffect(() => {
+    if (contractOptions.length > 0) {
+      // If current selection is not in the list, select the first one
+      const isValid = contractOptions.some(opt => opt.rate.id === selectedRateId)
+      if (!isValid) {
+        setSelectedRateId(contractOptions[0].rate.id)
+      }
+    }
+  }, [contractOptions, selectedRateId])
+  
+  const selectedRateItem = contractOptions.find(r => r.rate.id === selectedRateId) || contractOptions[0]
+  
+  const selectedPrice = useMemo(() => {
+    if (!selectedRateItem) return { cost: 0, sell: 0, margin: 0 }
+    
+    const { rate, contract } = selectedRateItem
+    const boardCost = contract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0
+    const baseRate = rate.rate - boardCost
+    const breakdown = calculatePriceBreakdown(baseRate, contract, selectedOcc, nights, boardCost)
+    
+    // breakdown.totalCost already includes all nights - don't multiply again!
+    const costPerRoom = breakdown.totalCost
+    const sellPerRoom = costPerRoom * 1.6
+    
+    return {
+      cost: costPerRoom * selectedQty,
+      sell: sellPerRoom * selectedQty,
+      margin: (sellPerRoom - costPerRoom) * selectedQty
+    }
+  }, [selectedRateItem, selectedQty, selectedOcc, nights])
   
   return (
-    <Card>
-      <CardContent className="pt-4">
-        <div className="flex justify-between items-start">
-          <div className="flex-1">
-            <div className="flex items-center gap-2 mb-2">
-              <h4 className="font-semibold">{rate.roomName}</h4>
-              <Badge variant="outline">{BOARD_TYPE_LABELS[rate.board_type]}</Badge>
-              <Badge variant="secondary" className="capitalize">{selectedOcc}</Badge>
+    <div className="border rounded-lg">
+      {/* Room Header - Always Visible */}
+      <div className="p-3 bg-muted/30">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <DoorOpen className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <span className="font-medium text-sm">{roomGroup.roomName}</span>
             </div>
-            <p className="text-sm text-muted-foreground">{hotel?.name} • {contract.contract_name}</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              <strong>{available}</strong> room{available !== 1 ? 's' : ''} available
-            </p>
+            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+              <span className="flex items-center gap-1">
+                <Package className="h-3 w-3" />
+                {roomGroup.totalAvailable} available
+              </span>
+              <span>{roomGroup.rates.length} contract{roomGroup.rates.length > 1 ? 's' : ''}</span>
+            </div>
           </div>
-          <div className="text-right">
-            <p className="text-2xl font-bold text-primary">{formatCurrency(totalPrice)}</p>
-            <p className="text-xs text-muted-foreground">
-              {formatCurrency(pricePerRoom)} × {selectedQty} room{selectedQty !== 1 ? 's' : ''}
-            </p>
-            <p className="text-xs text-muted-foreground">{nights} night{nights !== 1 ? 's' : ''}</p>
+          <div className="text-right text-xs">
+            <div className="font-medium text-sm">{formatCurrency(roomGroup.minPrice)}</div>
+            <div className="text-muted-foreground">from</div>
           </div>
         </div>
-        
-        <Separator className="my-3" />
-        
-        <div className="grid grid-cols-2 gap-2 mb-3">
+      </div>
+
+      {/* Contract Selection Accordion */}
+      <Accordion type="single" collapsible className="border-0">
+        <AccordionItem value="contracts" className="border-0">
+          <AccordionTrigger className="px-3 py-2 text-xs hover:no-underline">
+            <span className="flex items-center gap-2">
+              <TrendingUp className="h-3 w-3" />
+              Select Contract ({contractOptions.length} for {selectedOcc})
+            </span>
+          </AccordionTrigger>
+          <AccordionContent className="px-3 pb-3">
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+              {contractOptions.length === 0 && (
+                <p className="text-xs text-muted-foreground text-center py-2">
+                  No contracts available for {selectedOcc} occupancy
+                </p>
+              )}
+              {contractOptions.map((option, idx) => {
+                const isSelected = selectedRateId === option.rate.id
+                const isBest = idx === 0
+                
+                return (
+                  <button
+                    key={option.rate.id}
+                    onClick={() => setSelectedRateId(option.rate.id)}
+                    className={`w-full text-left p-2 rounded border transition-colors ${
+                      isSelected
+                        ? 'border-primary bg-primary/5'
+                        : 'border-border hover:border-primary/30 hover:bg-accent/30'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-xs font-medium truncate">{option.contract.contract_name}</span>
+                          {isBest && <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">Best</Badge>}
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                          <span className="flex items-center gap-0.5">
+                            <DollarSign className="h-3 w-3" />
+                            {formatCurrency(option.costPerRoom)}
+                          </span>
+                          <Separator orientation="vertical" className="h-3" />
+                          <span className="flex items-center gap-0.5 text-green-600">
+                            <Percent className="h-3 w-3" />
+                            {option.marginPercent.toFixed(0)}%
+                          </span>
+                          <Separator orientation="vertical" className="h-3" />
+                          <span>{option.available} avail</span>
+                        </div>
+                      </div>
+                      {isSelected && <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+
+      {/* Booking Controls */}
+      <div className="p-3 space-y-2 border-t">
+        <div className="grid grid-cols-2 gap-2">
           <div>
-            <Label className="text-xs">Occupancy</Label>
-            <Select value={selectedOcc} onValueChange={(v) => {
-              console.log('Occupancy changed to:', v)
-              setSelectedOcc(v as OccupancyType)
-            }}>
-              <SelectTrigger className="h-9">
+            <Label className="text-[11px] text-muted-foreground">Occupancy</Label>
+            <Select value={selectedOcc} onValueChange={(v) => setSelectedOcc(v as OccupancyType)}>
+              <SelectTrigger className="h-8 text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="single">Single (1 person)</SelectItem>
-                <SelectItem value="double">Double (2 people)</SelectItem>
-                <SelectItem value="triple">Triple (3 people)</SelectItem>
-                <SelectItem value="quad">Quad (4 people)</SelectItem>
+                {availableOccupancies.map(occ => (
+                  <SelectItem key={occ} value={occ} className="text-xs capitalize">
+                    {occ} {occ === 'single' && '(1p)'}
+                    {occ === 'double' && '(2p)'}
+                    {occ === 'triple' && '(3p)'}
+                    {occ === 'quad' && '(4p)'}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </div>
           <div>
-            <Label className="text-xs">Quantity</Label>
+            <Label className="text-[11px] text-muted-foreground">Quantity</Label>
             <Input 
               type="number" 
               min={1}
-              max={available}
+              max={selectedRateItem?.available || 1}
               value={selectedQty}
-              onChange={(e) => setSelectedQty(Math.min(available, Math.max(1, parseInt(e.target.value) || 1)))}
-              className="h-9"
+              onChange={(e) => setSelectedQty(Math.min(
+                selectedRateItem?.available || 1, 
+                Math.max(1, parseInt(e.target.value) || 1)
+              ))}
+              className="h-8 text-xs"
             />
           </div>
         </div>
         
-          <Button 
-            onClick={() => {
-              console.log('RateCard - Button clicked with selectedOcc:', selectedOcc)
-              onAddToCart(selectedQty, selectedOcc)
-            }}
-            size="sm"
-            className="w-full"
-          >
-            <ShoppingCart className="h-4 w-4 mr-2" />
-            Add to Cart ({selectedOcc})
-          </Button>
-      </CardContent>
-    </Card>
+        <div className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
+          <div>
+            <div className="text-muted-foreground">{selectedQty}× {nights}n ({selectedOcc})</div>
+            <div className="font-medium text-green-600">+{formatCurrency(selectedPrice.margin)} margin</div>
+            {selectedRateItem && (
+              <div className="text-[10px] text-muted-foreground truncate max-w-[120px]">
+                {selectedRateItem.contract.contract_name}
+              </div>
+            )}
+          </div>
+          <div className="text-right">
+            <div className="text-lg font-bold">{formatCurrency(selectedPrice.sell)}</div>
+            <div className="text-muted-foreground text-[10px]">cost: {formatCurrency(selectedPrice.cost)}</div>
+          </div>
+        </div>
+        
+        <Button 
+          onClick={() => {
+            if (selectedRateItem) {
+              onAddToCart(selectedRateItem, selectedQty, selectedOcc)
+            }
+          }}
+          size="sm"
+          className="w-full h-8 text-xs"
+          disabled={!selectedRateItem || contractOptions.length === 0}
+        >
+          <ShoppingCart className="h-3 w-3 mr-1.5" />
+          Add to Cart
+        </Button>
+      </div>
+    </div>
   )
 }
 
 export function BookingsNew() {
+  const navigate = useNavigate()
   const { bookings, tours, rates, contracts, hotels, addBooking, cancelBooking } = useData()
   
   // Dialog state
@@ -186,37 +343,77 @@ export function BookingsNew() {
         const contract = contracts.find(c => c.id === rate.contract_id)
         if (!contract) return null
         
-        // Check if contract dates overlap with booking dates
-        const contractStart = new Date(contract.start_date)
-        const contractEnd = new Date(contract.end_date)
+        // Filter by tour if contract is linked to specific tours
+        if (contract.tour_ids && contract.tour_ids.length > 0) {
+          if (!contract.tour_ids.includes(selectedTourId)) {
+            return null // Contract not linked to this tour
+          }
+        }
         
-        if (contractStart > end || contractEnd < start) return null
+        // Check rate validity dates (if specified), otherwise use contract dates
+        const rateStart = rate.valid_from ? new Date(rate.valid_from) : new Date(contract.start_date)
+        const rateEnd = rate.valid_to ? new Date(rate.valid_to) : new Date(contract.end_date)
+        
+        // Booking must fall within rate's validity period
+        if (rateStart > end || rateEnd < start) return null
+        
+        // Check night restrictions (rate-level overrides contract-level)
+        const rateMinNights = (rate as any).min_nights ?? contract.min_nights ?? 1
+        const rateMaxNights = (rate as any).max_nights ?? contract.max_nights ?? 365
+        const bookingNights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+        
+        if (bookingNights < rateMinNights || bookingNights > rateMaxNights) return null
         
         // Calculate availability from contract allocations
-        const allocation = contract.room_allocations?.find(a => a.room_group_id === rate.room_group_id)
+        const allocation = contract.room_allocations?.find(a => a.room_group_ids.includes(rate.room_group_id))
         if (!allocation) return null
         
-        // Calculate already booked rooms for this rate
-        const booked = bookings
+        // Calculate already booked rooms for this ALLOCATION POOL
+        // For shared allocations (e.g., Double/Twin), count bookings across ALL room types in the pool
+        const bookedForAllocation = bookings
           .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
           .flatMap(b => b.rooms)
-          .filter(r => r && r.rate_id === rate.id)
+          .filter(r => {
+            if (!r) return false
+            
+            // Method 1: Match by rate's contract_id (for regular inventory bookings)
+            if (r.rate_id) {
+              const bookedRate = rates.find(rt => rt.id === r.rate_id)
+              if (bookedRate && 
+                  bookedRate.contract_id === contract.id && 
+                  allocation.room_group_ids.includes(bookedRate.room_group_id)) {
+                return true
+              }
+            }
+            
+            // Method 2: Match by contractName (for converted buy-to-order bookings)
+            // This handles cases where rate_id points to old buy-to-order rate that doesn't exist
+            if (r.contractName === contract.contract_name && r.purchase_type === 'inventory') {
+              // Try to find room_group_id by room name
+              const hotel = hotels.find(h => h.id === contract.hotel_id)
+              const roomGroup = hotel?.room_groups?.find(rg => rg.room_type === r.roomName)
+              if (roomGroup && allocation.room_group_ids.includes(roomGroup.id)) {
+                return true
+              }
+            }
+            
+            return false
+          })
           .reduce((sum, r) => sum + r.quantity, 0)
         
-        const available = allocation.quantity - booked
+        const available = allocation.quantity - bookedForAllocation
         
         if (available <= 0) return null
         
         return {
           rate,
           contract,
-          available,
+          available, // This is now the SHARED availability for all occupancies of this room type
           hotel: hotels.find(h => h.id === contract.hotel_id)
         }
       })
-      .filter(Boolean)
+      .filter((item): item is NonNullable<typeof item> => item !== null)
       .filter(item => {
-        if (!item) return false
         // Apply filters
         if (filterOccupancy !== 'all' && item.rate.occupancy_type !== filterOccupancy) return false
         if (filterBoardType !== 'all' && item.rate.board_type !== filterBoardType) return false
@@ -225,13 +422,117 @@ export function BookingsNew() {
       })
   }, [checkInDate, checkOutDate, rates, contracts, bookings, hotels, filterOccupancy, filterBoardType, filterRoomType])
 
+  // Group rates: Hotel -> Room -> Contracts
+  const groupedByHotel = useMemo(() => {
+    const hotelGroups = new Map<number, {
+      hotelId: number
+      hotelName: string
+      roomGroups: Array<{
+        roomGroupId: string
+        roomName: string
+        rates: typeof availableRates
+        totalAvailable: number
+        minPrice: number
+        maxMargin: number
+      }>
+      allocationMap: Map<string, number> // Track allocations to avoid double-counting shared pools
+    }>()
+    
+    availableRates.forEach(item => {
+      const hotelId = item.hotel?.id || 0
+      
+      // Create hotel group if doesn't exist
+      if (!hotelGroups.has(hotelId)) {
+        hotelGroups.set(hotelId, {
+          hotelId,
+          hotelName: item.hotel?.name || '',
+          roomGroups: [],
+          allocationMap: new Map<string, number>() // Track allocations
+        })
+      }
+      
+      const hotelGroup = hotelGroups.get(hotelId)!
+      
+      // Find or create room group within hotel
+      let roomGroup = hotelGroup.roomGroups.find(rg => rg.roomGroupId === item.rate.room_group_id)
+      
+      if (!roomGroup) {
+        const newRoomGroup = {
+          roomGroupId: item.rate.room_group_id,
+          roomName: item.rate.roomName,
+          rates: [],
+          totalAvailable: 0,
+          minPrice: Infinity,
+          maxMargin: 0,
+          contractAvailability: new Map<number, number>() // Track per contract
+        } as any
+        hotelGroup.roomGroups.push(newRoomGroup)
+        roomGroup = newRoomGroup
+      }
+      
+      roomGroup!.rates.push(item)
+      
+      // Track availability per contract (different occupancies share the same pool)
+      const contractId = item.contract?.id || 0
+      const contractAvailMap = (roomGroup! as any).contractAvailability as Map<number, number>
+      
+      // Set availability for this contract (all occupancies of same contract have same value)
+      if (!contractAvailMap.has(contractId)) {
+        contractAvailMap.set(contractId, item.available)
+      }
+      
+      // Sum availability across unique contracts
+      roomGroup!.totalAvailable = Array.from(contractAvailMap.values()).reduce((sum, avail) => sum + avail, 0)
+      
+      // Track allocation at hotel level to avoid double-counting shared pools
+      // Create unique key: contractId + allocation (to handle shared Double/Twin pools)
+      if (item.contract && item.contract.room_allocations) {
+        const allocation = item.contract.room_allocations.find((a: any) => a.room_group_ids.includes(item.rate.room_group_id))
+        if (allocation) {
+          // Create unique allocation key (contract + all room types in allocation)
+          const allocationKey = `${contractId}-${allocation.room_group_ids.sort().join('-')}`
+          
+          // Only add this allocation's availability once
+          if (!hotelGroup.allocationMap.has(allocationKey)) {
+            hotelGroup.allocationMap.set(allocationKey, item.available)
+          }
+        }
+      }
+      
+      // Calculate price for comparison
+      const boardCost = item.contract.board_options?.find(o => o.board_type === item.rate.board_type)?.additional_cost || 0
+      const baseRate = item.rate.rate - boardCost
+      const breakdown = calculatePriceBreakdown(baseRate, item.contract, 'double', nights, boardCost)
+      // breakdown.totalCost already includes all nights - don't multiply again!
+      const costPerRoom = breakdown.totalCost
+      
+      roomGroup!.minPrice = Math.min(roomGroup!.minPrice, costPerRoom)
+      
+      // Calculate margin
+      const sellPerRoom = costPerRoom * 1.6
+      const margin = sellPerRoom - costPerRoom
+      roomGroup!.maxMargin = Math.max(roomGroup!.maxMargin, margin)
+    })
+    
+    // Sort hotels by name, and rooms within each hotel
+    return Array.from(hotelGroups.values())
+      .sort((a, b) => a.hotelName.localeCompare(b.hotelName))
+      .map(hotel => ({
+        ...hotel,
+        roomGroups: hotel.roomGroups.sort((a, b) => a.roomName.localeCompare(b.roomName))
+      }))
+  }, [availableRates, nights])
+
   // Get unique room types for filter
   const roomTypes = useMemo(() => {
-    const types = new Set<string>()
+    const typesMap = new Map<string, string>()
     availableRates.forEach(item => {
-      if (item) types.add(item.rate.room_group_id)
+      // Store room_group_id -> roomName mapping
+      if (!typesMap.has(item.rate.room_group_id)) {
+        typesMap.set(item.rate.room_group_id, item.rate.roomName)
+      }
     })
-    return Array.from(types)
+    return Array.from(typesMap.entries()).map(([id, name]) => ({ id, name }))
   }, [availableRates])
 
   // Add to cart
@@ -250,7 +551,8 @@ export function BookingsNew() {
       boardCost
     )
     
-    const pricePerRoom = breakdown.totalCost * nights
+    // breakdown.totalCost already includes all nights - don't multiply again!
+    const pricePerRoom = breakdown.totalCost
     const totalPrice = pricePerRoom * quantity
     
     const cartItem: CartItem = {
@@ -386,33 +688,24 @@ export function BookingsNew() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-bold">Bookings</h1>
-          <p className="text-muted-foreground mt-1">Search rates, add to cart, and create bookings</p>
+          <p className="text-muted-foreground mt-1">Search rooms, compare contracts, and create bookings for clients</p>
         </div>
-        <Dialog open={isCreateOpen} onOpenChange={(open) => {
-          setIsCreateOpen(open)
-          if (!open) {
-            // Reset on close
-            setCurrentStep('tour')
-            setCart([])
-            setSelectedTourId(0)
-            setCheckInDate('')
-            setCheckOutDate('')
-            setCustomerName('')
-            setCustomerEmail('')
-          }
-        }}>
+        <Button onClick={() => navigate('/bookings/create')}>
+          <Plus className="mr-2 h-4 w-4" />
+          Create Booking
+        </Button>
+        
+        {/* Old dialog hidden - replaced by dedicated page */}
+        <Dialog open={false} onOpenChange={() => {}}>
           <DialogTrigger asChild>
-            <Button>
-              <Plus className="mr-2 h-4 w-4" />
-              New Booking
-            </Button>
+            <div style={{display: 'none'}} />
           </DialogTrigger>
           <DialogContent className="max-w-6xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Booking</DialogTitle>
               <DialogDescription>
                 {currentStep === 'tour' && 'Select tour and dates'}
-                {currentStep === 'shop' && 'Browse and add rates to cart'}
+                {currentStep === 'shop' && 'Browse rooms and select contracts - Choose the best margin or lowest cost'}
                 {currentStep === 'cart' && 'Review your cart'}
                 {currentStep === 'checkout' && 'Enter customer details and confirm'}
               </DialogDescription>
@@ -555,7 +848,7 @@ export function BookingsNew() {
                         <SelectContent>
                           <SelectItem value="all">All</SelectItem>
                           {roomTypes.map(type => (
-                            <SelectItem key={type} value={type}>{type}</SelectItem>
+                            <SelectItem key={type.id} value={type.id}>{type.name}</SelectItem>
                           ))}
                         </SelectContent>
                       </Select>
@@ -563,28 +856,53 @@ export function BookingsNew() {
                   </CardContent>
                 </Card>
 
-                {/* Available Rates */}
-                <div className="space-y-2 max-h-96 overflow-y-auto">
-                  {availableRates.length === 0 && (
+                {/* Available Rates - Grouped by Hotel -> Room */}
+                <div className="space-y-2 max-h-96 overflow-y-auto pr-1">
+                  {groupedByHotel.length === 0 && (
                     <Card>
                       <CardContent className="pt-6 text-center text-muted-foreground">
                         <Info className="h-8 w-8 mx-auto mb-2 opacity-50" />
                         <p>No rates available for selected dates</p>
+                        <p className="text-xs mt-1">Try adjusting your filters or dates</p>
                       </CardContent>
                     </Card>
                   )}
-                  {availableRates.map((item, index) => {
-                    if (!item) return null
-                    
-                    return (
-                      <RateCard
-                        key={index}
-                        rateItem={item}
-                        nights={nights}
-                        onAddToCart={(quantity, occupancy) => addToCart(item, quantity, occupancy)}
-                      />
-                    )
-                  })}
+                  
+                  {/* Hotel Accordions */}
+                  <Accordion type="multiple" defaultValue={groupedByHotel.map(h => `hotel-${h.hotelId}`)} className="space-y-2">
+                    {groupedByHotel.map((hotel) => (
+                      <AccordionItem 
+                        key={hotel.hotelId} 
+                        value={`hotel-${hotel.hotelId}`}
+                        className="border rounded-lg overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-3 py-2 bg-muted/50 hover:bg-muted/70 hover:no-underline">
+                          <div className="flex items-center justify-between w-full pr-2">
+                            <div className="flex items-center gap-2">
+                              <Building2 className="h-4 w-4 text-primary" />
+                              <span className="font-semibold text-sm">{hotel.hotelName}</span>
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                              <span>{hotel.roomGroups.length} room type{hotel.roomGroups.length > 1 ? 's' : ''}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {Array.from(hotel.allocationMap.values()).reduce((sum, avail) => sum + avail, 0)} total
+                              </Badge>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="p-3 pt-2 space-y-2">
+                          {hotel.roomGroups.map((roomGroup, idx) => (
+                            <CompactRoomCard
+                              key={idx}
+                              roomGroup={roomGroup}
+                              nights={nights}
+                              onAddToCart={(rateItem, quantity, occupancy) => addToCart(rateItem, quantity, occupancy)}
+                            />
+                          ))}
+                        </AccordionContent>
+                      </AccordionItem>
+                    ))}
+                  </Accordion>
                 </div>
 
                 <DialogFooter className="flex justify-between">

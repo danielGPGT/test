@@ -49,7 +49,7 @@ import { ContractForm } from '@/components/forms/contract-form'
 
 export function InventorySetup() {
   const { 
-    hotels, contracts, rates, bookings, 
+    hotels, contracts, rates, bookings, tours,
     addHotel, updateHotel, deleteHotel,
     addContract, updateContract, deleteContract,
     addRate, updateRate, deleteRate
@@ -90,6 +90,7 @@ export function InventorySetup() {
     total_rooms: 0,
     base_rate: 0,
     currency: 'EUR',
+    tour_ids: [] as number[],
     room_allocations: [] as RoomAllocation[],
     pricing_strategy: 'per_occupancy' as 'per_occupancy' | 'flat_rate',
     occupancy_rates: [] as OccupancyRate[],
@@ -135,6 +136,15 @@ export function InventorySetup() {
     board_type: 'bed_breakfast' as BoardType,
     occupancy_type: 'double' as OccupancyType,
     base_rate: 0,
+    // Validity dates (default from contract)
+    valid_from: '',
+    valid_to: '',
+    // Night restrictions (default from contract)
+    min_nights: undefined as number | undefined,
+    max_nights: undefined as number | undefined,
+    // Shoulder night rates (per occupancy)
+    pre_shoulder_rates: [] as number[],
+    post_shoulder_rates: [] as number[],
     // Board pricing
     board_included: true,
     board_cost: 0,
@@ -148,6 +158,10 @@ export function InventorySetup() {
     markup_percentage: 0.60, // 60% default
     shoulder_markup_percentage: 0.30, // 30% default
   })
+  
+  // State for adding shoulder rates
+  const [preShoulderRateInput, setPreShoulderRateInput] = useState('')
+  const [postShoulderRateInput, setPostShoulderRateInput] = useState('')
 
   // Get selected entities
   const selectedHotel = useMemo(() => 
@@ -180,9 +194,16 @@ export function InventorySetup() {
         .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
         .flatMap(b => b.rooms)
         .filter(r => {
-          // Find the rate for this room and check if it belongs to this contract
+          // Check if room belongs to this contract
+          // Method 1: Match by rate's contract_id (for regular inventory bookings)
           const rate = rates.find(rt => rt.id === r.rate_id)
-          return rate && rate.contract_id === contract.id
+          if (rate && rate.contract_id === contract.id) return true
+          
+          // Method 2: Match by contractName (for converted buy-to-order bookings)
+          // This handles cases where rate_id points to old buy-to-order rate
+          if (r.contractName === contract.contract_name && r.purchase_type === 'inventory') return true
+          
+          return false
         })
         .reduce((sum, r) => sum + r.quantity, 0)
       
@@ -336,6 +357,7 @@ export function InventorySetup() {
         total_rooms: contract.total_rooms,
         base_rate: contract.base_rate,
         currency: contract.currency,
+        tour_ids: contract.tour_ids || [],
         room_allocations: contract.room_allocations || [],
         pricing_strategy: contract.pricing_strategy || 'per_occupancy',
         occupancy_rates: contract.occupancy_rates || [],
@@ -367,6 +389,7 @@ export function InventorySetup() {
         total_rooms: 0,
         base_rate: 0,
         currency: 'EUR',
+        tour_ids: [],
         room_allocations: [],
         pricing_strategy: 'per_occupancy',
         occupancy_rates: [],
@@ -419,6 +442,7 @@ export function InventorySetup() {
       total_rooms: contractForm.total_rooms,
       base_rate: contractForm.base_rate,
       currency: contractForm.currency,
+      tour_ids: contractForm.tour_ids,
       room_allocations: contractForm.room_allocations,
       pricing_strategy: contractForm.pricing_strategy,
       occupancy_rates: contractForm.occupancy_rates,
@@ -738,6 +762,15 @@ export function InventorySetup() {
                     board_type: 'bed_breakfast',
                     occupancy_type: 'double',
                     base_rate: selectedContract?.base_rate || 0,
+                    // Default validity dates from contract
+                    valid_from: selectedContract?.start_date || '',
+                    valid_to: selectedContract?.end_date || '',
+                    // Default night restrictions from contract
+                    min_nights: undefined,
+                    max_nights: undefined,
+                    // Shoulder rates (per occupancy, empty by default)
+                    pre_shoulder_rates: [],
+                    post_shoulder_rates: [],
                     board_included: !selectedContract, // For buy-to-order, board is separate by default
                     board_cost: 0,
                     override_costs: !selectedContract, // Force overrides for buy-to-order
@@ -748,6 +781,8 @@ export function InventorySetup() {
                     markup_percentage: 0.60,
                     shoulder_markup_percentage: 0.30,
                   })
+                  setPreShoulderRateInput('')
+                  setPostShoulderRateInput('')
                   setIsRateDialogOpen(true)
                 }}>
                   <Plus className="h-4 w-4" />
@@ -862,6 +897,15 @@ export function InventorySetup() {
                                       board_type: rate.board_type,
                                       occupancy_type: rate.occupancy_type,
                                       base_rate: rate.rate,
+                                      // Load validity dates from rate, fallback to contract
+                                      valid_from: rate.valid_from || selectedContract?.start_date || '',
+                                      valid_to: rate.valid_to || selectedContract?.end_date || '',
+                                      // Load night restrictions
+                                      min_nights: (rate as any).min_nights,
+                                      max_nights: (rate as any).max_nights,
+                                      // Load shoulder rates
+                                      pre_shoulder_rates: (rate as any).pre_shoulder_rates || [],
+                                      post_shoulder_rates: (rate as any).post_shoulder_rates || [],
                                       board_included: rate.board_included ?? true,
                                       board_cost: rate.board_cost || 0,
                                       override_costs: hasOverrides,
@@ -872,6 +916,8 @@ export function InventorySetup() {
                                       markup_percentage: rate.markup_percentage ?? 0.60,
                                       shoulder_markup_percentage: rate.shoulder_markup_percentage ?? 0.30,
                                     })
+                                    setPreShoulderRateInput('')
+                                    setPostShoulderRateInput('')
                                     setIsRateDialogOpen(true)
                                 }}
                               >
@@ -979,6 +1025,15 @@ export function InventorySetup() {
                                       board_type: rate.board_type,
                                       occupancy_type: rate.occupancy_type,
                                       base_rate: rate.rate,
+                                      // Load validity dates from rate (buy-to-order rates should have these)
+                                      valid_from: rate.valid_from || '',
+                                      valid_to: rate.valid_to || '',
+                                      // Load night restrictions
+                                      min_nights: (rate as any).min_nights,
+                                      max_nights: (rate as any).max_nights,
+                                      // Load shoulder rates
+                                      pre_shoulder_rates: (rate as any).pre_shoulder_rates || [],
+                                      post_shoulder_rates: (rate as any).post_shoulder_rates || [],
                                       board_included: false,
                                       board_cost: rate.board_cost || 0,
                                       override_costs: true,
@@ -989,6 +1044,8 @@ export function InventorySetup() {
                                       markup_percentage: rate.markup_percentage ?? 0.60,
                                       shoulder_markup_percentage: rate.shoulder_markup_percentage ?? 0.30,
                                     })
+                                    setPreShoulderRateInput('')
+                                    setPostShoulderRateInput('')
                                     setIsRateDialogOpen(true)
                                   }}
                                 >
@@ -1110,6 +1167,209 @@ export function InventorySetup() {
                     )}
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* Validity Dates */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2">
+                  <Label className="text-sm flex items-center gap-2">
+                    <Calendar className="h-3 w-3" />
+                    Valid From
+                  </Label>
+                  <Input
+                    type="date"
+                    value={rateForm.valid_from}
+                    onChange={(e) => setRateForm({ ...rateForm, valid_from: e.target.value })}
+                    placeholder={selectedContract?.start_date}
+                  />
+                  {selectedContract && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Contract: {selectedContract.start_date}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  <Label className="text-sm flex items-center gap-2">
+                    <Calendar className="h-3 w-3" />
+                    Valid To
+                  </Label>
+                  <Input
+                    type="date"
+                    value={rateForm.valid_to}
+                    onChange={(e) => setRateForm({ ...rateForm, valid_to: e.target.value })}
+                    placeholder={selectedContract?.end_date}
+                    min={rateForm.valid_from}
+                  />
+                  {selectedContract && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Contract: {selectedContract.end_date}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-2">
+                {selectedContract 
+                  ? 'This rate will only be available for bookings within these dates. Defaults to contract period.'
+                  : '⚠️ Required for buy-to-order rates'
+                }
+              </p>
+
+              {/* Night Restrictions */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-2">
+                  <Label className="text-sm">Min Nights</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={rateForm.min_nights ?? ''}
+                    onChange={(e) => setRateForm({ 
+                      ...rateForm, 
+                      min_nights: e.target.value ? parseInt(e.target.value) : undefined 
+                    })}
+                    placeholder={selectedContract?.min_nights?.toString() || '1'}
+                  />
+                  {selectedContract && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Contract: {selectedContract.min_nights || 1}
+                    </p>
+                  )}
+                </div>
+                <div className="grid gap-2">
+                  <Label className="text-sm">Max Nights</Label>
+                  <Input
+                    type="number"
+                    min={rateForm.min_nights || 1}
+                    value={rateForm.max_nights ?? ''}
+                    onChange={(e) => setRateForm({ 
+                      ...rateForm, 
+                      max_nights: e.target.value ? parseInt(e.target.value) : undefined 
+                    })}
+                    placeholder={selectedContract?.max_nights?.toString() || '14'}
+                  />
+                  {selectedContract && (
+                    <p className="text-[11px] text-muted-foreground">
+                      Contract: {selectedContract.max_nights || 14}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground -mt-2">
+                {selectedContract 
+                  ? 'Leave empty to use contract defaults. Set values to override for this rate.'
+                  : '⚠️ Required for buy-to-order rates - specify minimum and maximum nights allowed.'
+                }
+              </p>
+
+              {/* Shoulder Night Rates */}
+              <div className="space-y-3 pt-2">
+                <div className="border-t pt-3">
+                  <Label className="text-sm font-medium">Shoulder Night Rates (Optional)</Label>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Define special rates for nights outside the validity period for this occupancy type.
+                  </p>
+                  
+                  {/* Pre-shoulder rates */}
+                  <div className="space-y-2">
+                    <Label className="text-xs">Pre-Shoulder Rates (Before validity period)</Label>
+                    {rateForm.pre_shoulder_rates.length > 0 && (
+                      <div className="flex gap-1 flex-wrap">
+                        {rateForm.pre_shoulder_rates.map((rate, idx) => (
+                          <Badge key={idx} variant="secondary" className="text-xs">
+                            Day-{idx+1}: {formatCurrency(rate)}
+                            <button
+                              onClick={() => {
+                                const newRates = rateForm.pre_shoulder_rates.filter((_, i) => i !== idx)
+                                setRateForm({ ...rateForm, pre_shoulder_rates: newRates })
+                              }}
+                              className="ml-1 hover:text-destructive"
+                            >
+                              ×
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="Rate (e.g., 250.00)"
+                        value={preShoulderRateInput}
+                        onChange={(e) => setPreShoulderRateInput(e.target.value)}
+                        className="text-xs h-8"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          const value = parseFloat(preShoulderRateInput)
+                          if (value > 0) {
+                            setRateForm({
+                              ...rateForm,
+                              pre_shoulder_rates: [...rateForm.pre_shoulder_rates, value]
+                            })
+                            setPreShoulderRateInput('')
+                          }
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Post-shoulder rates */}
+                  <div className="space-y-2 mt-3">
+                    <Label className="text-xs">Post-Shoulder Rates (After validity period)</Label>
+                    {rateForm.post_shoulder_rates.length > 0 && (
+                      <div className="flex gap-1 flex-wrap">
+                        {rateForm.post_shoulder_rates.map((rate, idx) => (
+                          <Badge key={idx} variant="secondary" className="text-xs">
+                            Day+{idx+1}: {formatCurrency(rate)}
+                            <button
+                              onClick={() => {
+                                const newRates = rateForm.post_shoulder_rates.filter((_, i) => i !== idx)
+                                setRateForm({ ...rateForm, post_shoulder_rates: newRates })
+                              }}
+                              className="ml-1 hover:text-destructive"
+                            >
+                              ×
+                            </button>
+                          </Badge>
+                        ))}
+                      </div>
+                    )}
+                    <div className="flex gap-2">
+                      <Input
+                        type="number"
+                        step="0.01"
+                        placeholder="Rate (e.g., 250.00)"
+                        value={postShoulderRateInput}
+                        onChange={(e) => setPostShoulderRateInput(e.target.value)}
+                        className="text-xs h-8"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-8 text-xs"
+                        onClick={() => {
+                          const value = parseFloat(postShoulderRateInput)
+                          if (value > 0) {
+                            setRateForm({
+                              ...rateForm,
+                              post_shoulder_rates: [...rateForm.post_shoulder_rates, value]
+                            })
+                            setPostShoulderRateInput('')
+                          }
+                        }}
+                      >
+                        Add
+                      </Button>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div className="grid gap-2">
@@ -1366,11 +1626,33 @@ export function InventorySetup() {
                 if (!rateForm.room_group_id) { toast.error('Please select a room type'); return }
                 if (!rateForm.base_rate || rateForm.base_rate <= 0) { toast.error('Enter a valid base rate'); return }
                 
+                // Validation for buy-to-order rates
+                if (!selectedContract) {
+                  // Buy-to-order MUST have validity dates and night restrictions
+                  if (!rateForm.valid_from || !rateForm.valid_to) {
+                    toast.error('Buy-to-order rates require validity dates')
+                    return
+                  }
+                  if (!rateForm.min_nights || !rateForm.max_nights) {
+                    toast.error('Buy-to-order rates require min/max nights')
+                    return
+                  }
+                }
+                
                 const rateData: any = {
                   room_group_id: rateForm.room_group_id,
                   occupancy_type: rateForm.occupancy_type,
                   board_type: rateForm.board_type,
                   rate: rateForm.base_rate,
+                  // Validity dates
+                  valid_from: rateForm.valid_from || undefined,
+                  valid_to: rateForm.valid_to || undefined,
+                  // Night restrictions
+                  min_nights: rateForm.min_nights,
+                  max_nights: rateForm.max_nights,
+                  // Shoulder night rates (per occupancy)
+                  pre_shoulder_rates: rateForm.pre_shoulder_rates.length > 0 ? rateForm.pre_shoulder_rates : undefined,
+                  post_shoulder_rates: rateForm.post_shoulder_rates.length > 0 ? rateForm.post_shoulder_rates : undefined,
                   // Markup settings
                   markup_percentage: rateForm.markup_percentage,
                   shoulder_markup_percentage: rateForm.shoulder_markup_percentage,
@@ -1480,7 +1762,7 @@ export function InventorySetup() {
 
       {/* Contract Dialog */}
       <Dialog open={isContractDialogOpen} onOpenChange={setIsContractDialogOpen}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="!max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingContract ? 'Edit Contract' : 'Add New Contract'}</DialogTitle>
             <DialogDescription>
@@ -1491,6 +1773,7 @@ export function InventorySetup() {
             formData={contractForm}
             setFormData={setContractForm}
             hotels={hotels}
+            tours={tours}
             selectedHotel={hotels.find(h => h.id === contractForm.hotel_id)}
             boardTypeInput={boardTypeInput}
             setBoardTypeInput={setBoardTypeInput}

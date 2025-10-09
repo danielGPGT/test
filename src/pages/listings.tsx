@@ -11,7 +11,6 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
-import { Input } from '@/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -21,7 +20,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useData, Listing } from '@/contexts/data-context'
-import { Plus, Info, AlertCircle, Ticket, BedDouble, DollarSign } from 'lucide-react'
+import { Plus, Info, AlertCircle, Ticket, BedDouble } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -210,12 +209,12 @@ export function Listings() {
       hotel_id: listing.hotel_id || 0,
       room_group_id: listing.room_group_id,
       purchase_type: listing.purchase_type,
-      cost_price: listing.cost_price,
-      selling_price: listing.selling_price,
+      cost_price: listing.cost_price || 0,
+      selling_price: listing.selling_price || 0,
       commission_rate: listing.commission_rate || 0.20,
       shoulder_night_margin: listing.shoulder_night_margin || 0.25,
-      quantity: listing.quantity,
-      sold: listing.sold,
+      quantity: listing.quantity || 0,
+      sold: listing.sold || 0,
     })
     setIsEditOpen(true)
   }
