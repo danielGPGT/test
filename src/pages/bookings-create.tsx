@@ -881,25 +881,37 @@ export function BookingsCreate() {
       date
     }
     
-    setServiceCart([...serviceCart, cartItem])
+    setServiceCart(prev => [...prev, cartItem])
     
-    // Smart pairing suggestion for transfers
-    if ((serviceRate.direction === 'inbound' || serviceRate.direction === 'outbound') && serviceRate.paired_rate_id) {
-      const pairedRate = serviceRates.find(r => r.id === serviceRate.paired_rate_id)
-      if (pairedRate && !serviceCart.some(item => item.serviceRate.id === pairedRate.id)) {
-        const directionLabel = serviceRate.direction === 'inbound' ? 'departure' : 'arrival'
-        toast.success(`Added ${quantity}× ${serviceRate.categoryName} to cart`, {
-          description: `💡 Don't forget to add the ${directionLabel} transfer!`,
-          action: {
-            label: 'Add Return',
-            onClick: () => addServiceToCart(pairedRate, quantity, date)
-          }
-        })
-        return
-      }
+    const directionLabel = serviceRate.direction === 'inbound' ? '→ Arrival' :
+                          serviceRate.direction === 'outbound' ? '← Departure' :
+                          serviceRate.direction === 'round_trip' ? '↔ Round Trip' : ''
+    
+    toast.success(`Added ${quantity}× ${serviceRate.categoryName} ${directionLabel}`)
+  }
+  
+  const addBothWays = (inboundRate: ServiceRate, outboundRate: ServiceRate, quantity: number, date?: string) => {
+    const inboundItem: ServiceCartItem = {
+      type: 'service',
+      serviceRate: inboundRate,
+      quantity,
+      totalPrice: inboundRate.selling_price * quantity,
+      date
     }
     
-    toast.success(`Added ${quantity}× ${serviceRate.categoryName} to cart`)
+    const outboundItem: ServiceCartItem = {
+      type: 'service',
+      serviceRate: outboundRate,
+      quantity,
+      totalPrice: outboundRate.selling_price * quantity,
+      date
+    }
+    
+    // Add both in a single state update
+    setServiceCart(prev => [...prev, inboundItem, outboundItem])
+    
+    const totalBothWays = (inboundRate.selling_price + outboundRate.selling_price) * quantity
+    toast.success(`Added ${quantity}× both ways - ${formatCurrency(totalBothWays)}`)
   }
 
   const removeServiceFromCart = (index: number) => {
@@ -1326,114 +1338,218 @@ export function BookingsCreate() {
                           </AccordionTrigger>
                           <AccordionContent className="p-0 bg-card">
                             <div className="p-3 space-y-2">
-                              {categoryRates.map((serviceRate) => {
-                                const inventoryType = serviceInventoryTypes.find(t => t.id === serviceRate.inventory_type_id)
-                                const margin = serviceRate.selling_price - serviceRate.base_rate
-                                const marginPercent = (margin / serviceRate.base_rate) * 100
+                              {(() => {
+                                // Group paired transfers together
+                                const processedRates = new Set<number>()
+                                const rateElements: JSX.Element[] = []
                                 
-                                // Format date range
-                                const formatDate = (dateStr: string) => {
-                                  const date = new Date(dateStr)
-                                  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-                                }
-                                
-                                // Get active days
-                                const getActiveDays = () => {
-                                  if (!serviceRate.days_of_week) return 'All days'
-                                  const days = []
-                                  if (serviceRate.days_of_week.monday) days.push('Mon')
-                                  if (serviceRate.days_of_week.tuesday) days.push('Tue')
-                                  if (serviceRate.days_of_week.wednesday) days.push('Wed')
-                                  if (serviceRate.days_of_week.thursday) days.push('Thu')
-                                  if (serviceRate.days_of_week.friday) days.push('Fri')
-                                  if (serviceRate.days_of_week.saturday) days.push('Sat')
-                                  if (serviceRate.days_of_week.sunday) days.push('Sun')
-                                  return days.length === 7 ? 'All days' : days.join(', ')
-                                }
-                                
-                                return (
-                                  <div key={serviceRate.id} className="border rounded-lg p-3 hover:bg-muted/30 transition-colors">
-                                    <div className="flex items-start justify-between gap-4">
-                                      <div className="flex-1">
-                                        <h3 className="font-semibold text-sm mb-1">{serviceRate.categoryName}</h3>
-                                        <p className="text-xs text-muted-foreground mb-1">
-                                          {inventoryType?.name}
-                                          {serviceRate.direction && (
-                                            <span className="ml-1">
-                                              • <span className="font-medium capitalize">
-                                                {serviceRate.direction === 'inbound' ? '→ Arrival' : 
-                                                 serviceRate.direction === 'outbound' ? '← Departure' :
-                                                 serviceRate.direction === 'round_trip' ? '↔ Round Trip' :
-                                                 serviceRate.direction.replace('_', ' ')}
-                                              </span>
-                                            </span>
-                                          )}
-                                        </p>
-                                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
-                                          <Calendar className="h-3 w-3" />
-                                          <span>{formatDate(serviceRate.valid_from)} - {formatDate(serviceRate.valid_to)}</span>
-                                          <span>•</span>
-                                          <span className="font-mono font-medium">{getActiveDays()}</span>
-                                        </div>
-                                        <div className="flex gap-1 flex-wrap">
-                                          <Badge variant={serviceRate.inventory_type === 'contract' ? 'default' : 'outline'} className="text-xs">
-                                            {serviceRate.inventory_type === 'contract' ? 'Contract' : 'Buy-to-Order'}
-                                          </Badge>
-                                          <Badge variant="outline" className="text-xs">
-                                            {serviceRate.pricing_unit.replace('_', ' ')}
-                                          </Badge>
-                                          {serviceRate.inventory_type === 'contract' && serviceRate.available_quantity !== undefined && (
-                                            <Badge variant="secondary" className="text-xs">
-                                              {serviceRate.available_quantity} available
-                                            </Badge>
-                                          )}
-                                        </div>
-                                      </div>
-                                      
-                                      <div className="text-right">
-                                        <div className="text-lg font-bold text-primary">
-                                          {formatCurrency(serviceRate.selling_price)}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground">
-                                          Cost: {formatCurrency(serviceRate.base_rate)}
-                                        </div>
-                                        <div className="text-xs text-green-600">
-                                          +{formatCurrency(margin)} ({marginPercent.toFixed(0)}%)
-                                        </div>
-                                        
-                                        {/* Paired Transfer Suggestion */}
-                                        {serviceRate.paired_rate_id && (
-                                          <div className="text-xs text-blue-600 mt-1">
-                                            💡 {serviceRate.direction === 'inbound' ? 'Return available' : 'Outbound available'}
+                                categoryRates.forEach((serviceRate) => {
+                                  if (processedRates.has(serviceRate.id)) return
+                                  
+                                  const inventoryType = serviceInventoryTypes.find(t => t.id === serviceRate.inventory_type_id)
+                                  const margin = serviceRate.selling_price - serviceRate.base_rate
+                                  const marginPercent = (margin / serviceRate.base_rate) * 100
+                                  
+                                  // Format date range
+                                  const formatDate = (dateStr: string) => {
+                                    const date = new Date(dateStr)
+                                    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                                  }
+                                  
+                                  // Get active days
+                                  const getActiveDays = (rate: typeof serviceRate) => {
+                                    if (!rate.days_of_week) return 'All days'
+                                    const days = []
+                                    if (rate.days_of_week.monday) days.push('Mon')
+                                    if (rate.days_of_week.tuesday) days.push('Tue')
+                                    if (rate.days_of_week.wednesday) days.push('Wed')
+                                    if (rate.days_of_week.thursday) days.push('Thu')
+                                    if (rate.days_of_week.friday) days.push('Fri')
+                                    if (rate.days_of_week.saturday) days.push('Sat')
+                                    if (rate.days_of_week.sunday) days.push('Sun')
+                                    return days.length === 7 ? 'All days' : days.join(', ')
+                                  }
+                                  
+                                  // Check if this rate has a pair
+                                  const pairedRate = serviceRate.paired_rate_id 
+                                    ? categoryRates.find(r => r.id === serviceRate.paired_rate_id)
+                                    : null
+                                  
+                                  if (pairedRate && (serviceRate.direction === 'inbound' || serviceRate.direction === 'outbound')) {
+                                    // Paired transfer card (show both directions)
+                                    processedRates.add(serviceRate.id)
+                                    processedRates.add(pairedRate.id)
+                                    
+                                    const inboundRate = serviceRate.direction === 'inbound' ? serviceRate : pairedRate
+                                    const outboundRate = serviceRate.direction === 'outbound' ? serviceRate : pairedRate
+                                    const totalBothWays = inboundRate.selling_price + outboundRate.selling_price
+                                    
+                                    rateElements.push(
+                                      <div key={`pair-${serviceRate.id}-${pairedRate.id}`} className="border-2 rounded-lg p-3 hover:bg-muted/30 transition-colors" style={{ borderColor: 'hsl(var(--primary) / 0.3)' }}>
+                                        <div className="mb-3">
+                                          <div className="flex items-center justify-between mb-1">
+                                            <h3 className="font-semibold text-sm">{serviceRate.categoryName}</h3>
+                                            <Badge variant="outline" className="text-xs">Round Trip Available</Badge>
                                           </div>
-                                        )}
+                                          <p className="text-xs text-muted-foreground">{inventoryType?.name}</p>
+                                          <div className="flex items-center gap-2 text-xs text-muted-foreground mt-1">
+                                            <Calendar className="h-3 w-3" />
+                                            <span>{formatDate(serviceRate.valid_from)} - {formatDate(serviceRate.valid_to)}</span>
+                                            <span>•</span>
+                                            <span className="font-mono font-medium">{getActiveDays(serviceRate)}</span>
+                                          </div>
+                                        </div>
                                         
-                                        <div className="flex gap-2 items-center justify-end mt-2">
+                                        <Separator className="my-2" />
+                                        
+                                        {/* Inbound & Outbound Options */}
+                                        <div className="grid grid-cols-2 gap-3 mb-3">
+                                          <div className="border rounded p-2 bg-muted/20">
+                                            <div className="flex items-center gap-1 mb-1">
+                                              <span className="text-xs font-medium">→ Arrival</span>
+                                            </div>
+                                            <div className="text-sm font-bold text-primary">{formatCurrency(inboundRate.selling_price)}</div>
+                                            <div className="text-xs text-muted-foreground">+{formatCurrency(inboundRate.selling_price - inboundRate.base_rate)} margin</div>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="w-full mt-2 h-7 text-xs"
+                                              onClick={() => {
+                                                const qtyInput = document.getElementById(`pair-qty-${serviceRate.id}`) as HTMLInputElement
+                                                const qty = parseInt(qtyInput?.value || '1')
+                                                addServiceToCart(inboundRate, qty, checkInDate)
+                                              }}
+                                            >
+                                              Add Arrival
+                                            </Button>
+                                          </div>
+                                          
+                                          <div className="border rounded p-2 bg-muted/20">
+                                            <div className="flex items-center gap-1 mb-1">
+                                              <span className="text-xs font-medium">← Departure</span>
+                                            </div>
+                                            <div className="text-sm font-bold text-primary">{formatCurrency(outboundRate.selling_price)}</div>
+                                            <div className="text-xs text-muted-foreground">+{formatCurrency(outboundRate.selling_price - outboundRate.base_rate)} margin</div>
+                                            <Button
+                                              size="sm"
+                                              variant="outline"
+                                              className="w-full mt-2 h-7 text-xs"
+                                              onClick={() => {
+                                                const qtyInput = document.getElementById(`pair-qty-${serviceRate.id}`) as HTMLInputElement
+                                                const qty = parseInt(qtyInput?.value || '1')
+                                                addServiceToCart(outboundRate, qty, checkInDate)
+                                              }}
+                                            >
+                                              Add Departure
+                                            </Button>
+                                          </div>
+                                        </div>
+                                        
+                                        {/* Add Both Ways */}
+                                        <div className="flex items-center gap-2">
                                           <Input
                                             type="number"
                                             min={1}
-                                            max={serviceRate.inventory_type === 'contract' ? serviceRate.available_quantity : undefined}
                                             defaultValue={1}
-                                            className="w-16 h-8 text-xs"
-                                            id={`qty-${serviceRate.id}`}
+                                            className="w-20 h-9 text-xs"
+                                            id={`pair-qty-${serviceRate.id}`}
                                           />
                                           <Button
-                                            size="sm"
+                                            className="flex-1 h-9"
                                             onClick={() => {
-                                              const qtyInput = document.getElementById(`qty-${serviceRate.id}`) as HTMLInputElement
+                                              const qtyInput = document.getElementById(`pair-qty-${serviceRate.id}`) as HTMLInputElement
                                               const qty = parseInt(qtyInput?.value || '1')
-                                              addServiceToCart(serviceRate, qty, checkInDate)
+                                              addBothWays(inboundRate, outboundRate, qty, checkInDate)
                                             }}
                                           >
-                                            <Check className="h-3 w-3 mr-1" />
-                                            Add
+                                            <Check className="h-4 w-4 mr-2" />
+                                            Add Both Ways - {formatCurrency(totalBothWays)}
                                           </Button>
                                         </div>
                                       </div>
-                                    </div>
-                                  </div>
-                                )
-                              })}
+                                    )
+                                  } else {
+                                    // Single service card (no pairing or round-trip)
+                                    processedRates.add(serviceRate.id)
+                                    
+                                    rateElements.push(
+                                      <div key={serviceRate.id} className="border rounded-lg p-3 hover:bg-muted/30 transition-colors">
+                                        <div className="flex items-start justify-between gap-4">
+                                          <div className="flex-1">
+                                            <h3 className="font-semibold text-sm mb-1">{serviceRate.categoryName}</h3>
+                                            <p className="text-xs text-muted-foreground mb-1">
+                                              {inventoryType?.name}
+                                              {serviceRate.direction && (
+                                                <span className="ml-1">
+                                                  • <span className="font-medium capitalize">
+                                                    {serviceRate.direction === 'round_trip' ? '↔ Round Trip' :
+                                                     serviceRate.direction.replace('_', ' ')}
+                                                  </span>
+                                                </span>
+                                              )}
+                                            </p>
+                                            <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                                              <Calendar className="h-3 w-3" />
+                                              <span>{formatDate(serviceRate.valid_from)} - {formatDate(serviceRate.valid_to)}</span>
+                                              <span>•</span>
+                                              <span className="font-mono font-medium">{getActiveDays(serviceRate)}</span>
+                                            </div>
+                                            <div className="flex gap-1 flex-wrap">
+                                              <Badge variant={serviceRate.inventory_type === 'contract' ? 'default' : 'outline'} className="text-xs">
+                                                {serviceRate.inventory_type === 'contract' ? 'Contract' : 'Buy-to-Order'}
+                                              </Badge>
+                                              <Badge variant="outline" className="text-xs">
+                                                {serviceRate.pricing_unit.replace('_', ' ')}
+                                              </Badge>
+                                              {serviceRate.inventory_type === 'contract' && serviceRate.available_quantity !== undefined && (
+                                                <Badge variant="secondary" className="text-xs">
+                                                  {serviceRate.available_quantity} available
+                                                </Badge>
+                                              )}
+                                            </div>
+                                          </div>
+                                          
+                                          <div className="text-right">
+                                            <div className="text-lg font-bold text-primary">
+                                              {formatCurrency(serviceRate.selling_price)}
+                                            </div>
+                                            <div className="text-xs text-muted-foreground">
+                                              Cost: {formatCurrency(serviceRate.base_rate)}
+                                            </div>
+                                            <div className="text-xs text-green-600">
+                                              +{formatCurrency(margin)} ({marginPercent.toFixed(0)}%)
+                                            </div>
+                                            
+                                            <div className="flex gap-2 items-center justify-end mt-2">
+                                              <Input
+                                                type="number"
+                                                min={1}
+                                                max={serviceRate.inventory_type === 'contract' ? serviceRate.available_quantity : undefined}
+                                                defaultValue={1}
+                                                className="w-16 h-8 text-xs"
+                                                id={`qty-${serviceRate.id}`}
+                                              />
+                                              <Button
+                                                size="sm"
+                                                onClick={() => {
+                                                  const qtyInput = document.getElementById(`qty-${serviceRate.id}`) as HTMLInputElement
+                                                  const qty = parseInt(qtyInput?.value || '1')
+                                                  addServiceToCart(serviceRate, qty, checkInDate)
+                                                }}
+                                              >
+                                                <Check className="h-3 w-3 mr-1" />
+                                                Add
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )
+                                  }
+                                })
+                                
+                                return rateElements
+                              })()}
                             </div>
                           </AccordionContent>
                         </AccordionItem>
