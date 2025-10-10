@@ -9,7 +9,12 @@ import {
   List,
   ShoppingCart,
   BarChart,
-  ShoppingBag
+  ShoppingBag,
+  Users,
+  Truck,
+  CreditCard,
+  Package,
+  ClipboardList
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -20,10 +25,15 @@ const iconMap = {
   'file-text': FileText,
   'dollar-sign': DollarSign,
   warehouse: Warehouse,
+  package: Package,
+  'clipboard-list': ClipboardList,
+  truck: Truck,
+  'credit-card': CreditCard,
   list: List,
   'shopping-cart': ShoppingCart,
   'shopping-bag': ShoppingBag,
   'bar-chart': BarChart,
+  users: Users,
 }
 
 interface NavItem {
@@ -36,9 +46,14 @@ const navItems: NavItem[] = [
   { title: "Dashboard", icon: "dashboard", route: "/" },
   { title: "Tours", icon: "calendar", route: "/tours" },
   { title: "Inventory Setup", icon: "warehouse", route: "/inventory" },
+  { title: "Service Types", icon: "package", route: "/service-providers" },
+  { title: "Service Inventory", icon: "warehouse", route: "/service-inventory" },
+  { title: "Operations", icon: "clipboard-list", route: "/operations" },
+  { title: "Suppliers", icon: "truck", route: "/suppliers" },
+  { title: "Payments", icon: "credit-card", route: "/payments" },
   { title: "Create Booking", icon: "shopping-cart", route: "/bookings/create" },
   { title: "Bookings", icon: "shopping-bag", route: "/bookings" },
-
+  { title: "Rooming List", icon: "users", route: "/rooming-list" },
   { title: "Reports", icon: "bar-chart", route: "/reports" }
 ]
 

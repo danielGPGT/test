@@ -23,7 +23,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { useData, Booking, OccupancyType } from '@/contexts/data-context'
-import { Plus, AlertCircle, Users, FileText, CheckCircle, RefreshCw } from 'lucide-react'
+import { Plus, AlertCircle, Users, FileText, CheckCircle, RefreshCw, DollarSign, TrendingUp } from 'lucide-react'
 import {
   Accordion,
   AccordionContent,
@@ -57,6 +57,7 @@ export function Bookings() {
     // Customer + rooms
     customer_name: '',
     customer_email: '',
+    customer_phone: '',
     quantity: 1,
     // Second room (optional)
     second_listing_id: 0,
@@ -639,6 +640,7 @@ export function Bookings() {
       tour_id: formData.tour_id,
           customer_name: formData.customer_name,
           customer_email: formData.customer_email,
+          customer_phone: formData.customer_phone || '+1 555-000-0000', // Default if not provided
           check_in_date: effectiveCheckIn,
           check_out_date: effectiveCheckOut,
           nights: nights,
@@ -668,6 +670,7 @@ export function Bookings() {
       children: 0,
       customer_name: '',
       customer_email: '',
+      customer_phone: '',
       quantity: 1,
       // Second room (optional)
       second_listing_id: 0,
@@ -803,46 +806,62 @@ export function Bookings() {
       </div>
 
       {/* Pending Buy-to-Order Bookings Alert */}
-      {bookings.some(b => b.rooms && b.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase')) && (
-        <Card className="border-orange-500 bg-orange-50 dark:bg-orange-950">
-          <CardContent className="pt-6">
-            <div className="flex items-start gap-3">
-              <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
-              <div>
-                <h3 className="font-semibold text-orange-900 dark:text-orange-100">
-                  Pending Hotel Purchases
-                </h3>
-                <p className="text-sm text-orange-700 dark:text-orange-200 mt-1">
-                  You have buy-to-order bookings that need rooms purchased from the hotel. 
-                  Operations team must contact the hotel and enter purchase details.
-                </p>
-                <div className="mt-3 space-y-2">
-                  {bookings
-                    .filter(b => b.rooms && b.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase'))
-                    .map(booking => (
-                      <div key={booking.id} className="flex items-center justify-between bg-background/50 rounded-md p-2">
-                        <div className="text-sm">
-                          <span className="font-medium">Booking #{booking.id}</span>
-                          {' - '}
-                          {booking.customer_name} 
-                          {' - '}
-                          {booking.rooms.map(r => `${r.quantity}× ${r.hotelName} - ${r.roomName} (${r.occupancy_type})`).join(' + ')}
+      {(() => {
+        const pendingBookings = bookings.filter(b => 
+          b.rooms && b.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase')
+        )
+        const pendingRoomsCount = pendingBookings
+          .flatMap(b => b.rooms || [])
+          .filter(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase')
+          .reduce((sum, r) => sum + r.quantity, 0)
+        
+        if (pendingBookings.length === 0) return null
+        
+        return (
+          <Card className="border-orange-500 bg-orange-50 dark:bg-orange-950">
+            <CardContent className="pt-6">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-orange-600 mt-0.5 flex-shrink-0" />
+                <div className="flex-1">
+                  <h3 className="font-semibold text-orange-900 dark:text-orange-100">
+                    ⏳ Pending Hotel Purchases ({pendingRoomsCount} room{pendingRoomsCount !== 1 ? 's' : ''})
+                  </h3>
+                  <p className="text-sm text-orange-700 dark:text-orange-200 mt-1">
+                    {pendingBookings.length} booking{pendingBookings.length !== 1 ? 's' : ''} need{pendingBookings.length === 1 ? 's' : ''} purchase confirmation from operations team.
+                  </p>
+                  <div className="mt-3 space-y-2">
+                    {pendingBookings.map(booking => {
+                      const pendingRooms = booking.rooms.filter(r => 
+                        r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase'
+                      )
+                      return (
+                        <div key={booking.id} className="flex items-center justify-between bg-background/50 rounded-md p-2">
+                          <div className="text-sm flex-1">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-medium">Booking #{booking.id}</span>
+                              <Badge variant="secondary" className="text-xs">{booking.customer_name}</Badge>
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              {pendingRooms.map(r => `${r.quantity}× ${r.roomName} (${r.occupancy_type})`).join(' + ')}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={() => handleOpenPurchaseForm(booking)}
+                            variant="default"
+                          >
+                            Enter Purchase Details
+                          </Button>
                         </div>
-                        <Button
-                          size="sm"
-                          onClick={() => handleOpenPurchaseForm(booking)}
-                          variant="default"
-                        >
-                          Enter Purchase Details
-                        </Button>
-                      </div>
-                    ))}
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+            </CardContent>
+          </Card>
+        )
+      })()}
 
       {/* Bookings Table */}
       <DataTable
@@ -969,8 +988,32 @@ export function Bookings() {
                           </p>
                         </div>
 
+                        {/* Estimated Cost Reference */}
+                        <div className="p-3 bg-blue-50 dark:bg-blue-950/30 rounded-lg border border-blue-200">
+                          <div className="flex items-center gap-2 mb-2">
+                            <TrendingUp className="h-4 w-4 text-blue-600" />
+                            <span className="text-sm font-medium text-blue-900 dark:text-blue-100">
+                              Estimated Costs (Reference)
+                            </span>
+                          </div>
+                          <div className="space-y-1 text-xs">
+                            {selectedBookingForPurchase.rooms
+                              .filter(r => r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase')
+                              .map((room, idx) => {
+                                const rate = rates.find(r => r.id === room.rate_id)
+                                const estimatedCost = rate ? rate.rate : 0
+                                return (
+                                  <div key={idx} className="flex justify-between text-blue-800 dark:text-blue-200">
+                                    <span>{room.roomName}:</span>
+                                    <span className="font-medium">~{formatCurrency(estimatedCost)} per room</span>
+                                  </div>
+                                )
+                              })}
+                          </div>
+                        </div>
+
                         <div className="grid gap-2">
-                          <Label htmlFor="cost_per_room">Cost Per Room (from hotel) *</Label>
+                          <Label htmlFor="cost_per_room">Actual Cost Per Room (from hotel) *</Label>
                           <Input
                             id="cost_per_room"
                             type="number"
@@ -980,13 +1023,39 @@ export function Bookings() {
                             onChange={(e) => setPurchaseFormData({ ...purchaseFormData, cost_per_room: parseFloat(e.target.value) || 0 })}
                             placeholder="e.g., 130.00"
                           />
-                          {purchaseFormData.cost_per_room > 0 && (
-                            <div className="text-sm space-y-1">
-                              <p className="text-muted-foreground">
-                                <strong>Note:</strong> Purchase details feature being updated for new room structure
-                              </p>
-                            </div>
-                          )}
+                          {purchaseFormData.cost_per_room > 0 && (() => {
+                            const pendingRoom = selectedBookingForPurchase.rooms.find(r => 
+                              r.purchase_type === 'buy_to_order' && r.purchase_status === 'pending_purchase'
+                            )
+                            if (!pendingRoom) return null
+                            
+                            const rate = rates.find(r => r.id === pendingRoom.rate_id)
+                            const estimatedCost = rate ? rate.rate : 0
+                            const variance = estimatedCost - purchaseFormData.cost_per_room
+                            const variancePercent = estimatedCost > 0 ? ((variance / estimatedCost) * 100) : 0
+                            
+                            if (estimatedCost === 0) return null
+                            
+                            return (
+                              <div className={`p-2 rounded text-xs ${variance >= 0 ? 'bg-green-50 text-green-900' : 'bg-red-50 text-red-900'}`}>
+                                <div className="flex items-center justify-between">
+                                  <span>Variance from estimate:</span>
+                                  <span className="font-bold">
+                                    {variance >= 0 ? '✓ ' : '⚠️ '}
+                                    {variance >= 0 ? '+' : ''}{formatCurrency(variance)} 
+                                    ({variancePercent >= 0 ? '+' : ''}{variancePercent.toFixed(1)}%)
+                                  </span>
+                                </div>
+                                {Math.abs(variancePercent) > 10 && (
+                                  <p className="mt-1 text-[11px]">
+                                    {variance >= 0 
+                                      ? '💰 Better than estimated! Extra margin.' 
+                                      : '⚠️ Higher than estimated. Check if acceptable.'}
+                                  </p>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </div>
 
                         <div className="grid gap-2">
@@ -1114,7 +1183,7 @@ export function Bookings() {
                 <CardContent className="pb-3">
                   <div className="space-y-3">
                     {viewingBooking.rooms.map((room, idx) => (
-                      <div key={idx} className="p-3 border rounded-lg">
+                      <div key={idx} className={`p-3 border rounded-lg ${room.purchase_type === 'buy_to_order' ? 'border-orange-200 bg-orange-50/20' : ''}`}>
                         <div className="flex items-center justify-between mb-2">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-primary">{room.hotelName}</span>
@@ -1132,7 +1201,22 @@ export function Bookings() {
                         <div className="grid grid-cols-2 gap-2 text-xs text-muted-foreground">
                           <div>Contract: {room.contractName}</div>
                           <div>Quantity: {room.quantity} room{room.quantity > 1 ? 's' : ''}</div>
-                          <div>Type: <Badge variant={room.purchase_type === 'inventory' ? 'default' : 'secondary'} className="text-xs">{room.purchase_type}</Badge></div>
+                          <div className="flex items-center gap-1">
+                            Type: <Badge 
+                              variant={room.purchase_type === 'inventory' ? 'default' : 'secondary'} 
+                              className={`text-xs ${room.purchase_type === 'buy_to_order' ? 'border-orange-500 text-orange-700 bg-orange-100' : ''}`}
+                            >
+                              {room.purchase_type}
+                            </Badge>
+                            {room.purchase_type === 'buy_to_order' && (
+                              <Badge 
+                                variant={room.purchase_status === 'purchased' ? 'default' : 'destructive'} 
+                                className="text-xs"
+                              >
+                                {room.purchase_status === 'purchased' ? '✓ Purchased' : '⏳ Pending'}
+                              </Badge>
+                            )}
+                          </div>
                           <div>Per Room: {formatCurrency(room.price_per_room)}</div>
                         </div>
                         
@@ -1182,11 +1266,18 @@ export function Bookings() {
                 <CardContent className="pb-3">
                   <div className="space-y-2">
                     {viewingBooking.rooms.map((room, idx) => (
-                      <div key={idx} className="flex justify-between text-sm border-b pb-2 last:border-0">
-                        <span className="text-muted-foreground">
-                          {room.quantity}× {room.roomName} ({room.occupancy_type})
-                        </span>
-                        <span className="font-medium">{formatCurrency(room.total_price)}</span>
+                      <div key={idx} className="border-b pb-2 last:border-0">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">
+                            {room.quantity}× {room.roomName} ({room.occupancy_type})
+                          </span>
+                          <span className="font-medium">{formatCurrency(room.total_price)}</span>
+                        </div>
+                        {room.contractName && (
+                          <div className="text-xs text-muted-foreground mt-0.5">
+                            {room.contractName}
+                          </div>
+                        )}
                       </div>
                     ))}
                     <div className="flex justify-between text-lg font-bold pt-2 border-t">
@@ -1199,47 +1290,161 @@ export function Bookings() {
 
               {/* Purchase Details (if buy-to-order) */}
               {viewingBooking.rooms.some(r => r.purchase_type === 'buy_to_order' && r.purchase_order) && (
-                <Card className="border-orange-200">
+                <Card className="border-orange-200 bg-orange-50/30 dark:bg-orange-950/20">
                   <CardHeader className="py-3">
-                    <CardTitle className="text-sm font-medium">Purchase Details</CardTitle>
+                    <CardTitle className="text-sm font-medium flex items-center gap-2">
+                      <DollarSign className="h-4 w-4 text-orange-600" />
+                      Purchase Details (Buy-to-Order)
+                    </CardTitle>
                   </CardHeader>
                   <CardContent className="pb-3">
                     <div className="space-y-3">
                       {viewingBooking.rooms
                         .filter(r => r.purchase_type === 'buy_to_order' && r.purchase_order)
-                        .map((room, idx) => (
-                          <div key={idx} className="p-3 border rounded">
-                            <div className="font-medium mb-2">{room.roomName} ({room.occupancy_type})</div>
-                            <div className="grid grid-cols-2 gap-3 text-sm">
+                        .map((room, idx) => {
+                          // Use stored estimated cost (includes taxes, fees, board, etc.)
+                          const estimatedCostPerRoom = room.estimated_cost_per_room || 0
+                          const actualCostPerRoom = room.purchase_order?.cost_per_room || 0
+                          const costVariance = estimatedCostPerRoom - actualCostPerRoom
+                          const variancePercent = estimatedCostPerRoom > 0 
+                            ? ((costVariance / estimatedCostPerRoom) * 100) 
+                            : 0
+                          
+                          return (
+                          <div key={idx} className="p-3 border rounded-lg bg-white dark:bg-card">
+                            <div className="flex items-center justify-between mb-3">
+                              <div className="font-medium">{room.roomName} ({room.occupancy_type})</div>
+                              <Badge variant="default" className="bg-green-600">Purchased</Badge>
+                            </div>
+                            
+                            {/* Team & Hotel Info */}
+                            <div className="grid grid-cols-2 gap-3 text-sm mb-3 pb-3 border-b">
                               <div>
-                                <span className="text-muted-foreground">Purchased By:</span>
+                                <span className="text-xs text-muted-foreground">Purchased By:</span>
                                 <p className="font-medium">{room.purchase_order?.assigned_to || 'N/A'}</p>
                               </div>
                               <div>
-                                <span className="text-muted-foreground">Hotel Contact:</span>
+                                <span className="text-xs text-muted-foreground">Hotel Contact:</span>
                                 <p className="font-medium">{room.purchase_order?.hotel_contact || 'N/A'}</p>
                               </div>
                               <div>
-                                <span className="text-muted-foreground">Confirmation #:</span>
-                                <p className="font-medium">{room.purchase_order?.hotel_confirmation || 'N/A'}</p>
+                                <span className="text-xs text-muted-foreground">Purchase Date:</span>
+                                <p className="font-medium">{room.purchase_order?.purchase_date || 'N/A'}</p>
                               </div>
                               <div>
-                                <span className="text-muted-foreground">Cost Per Room:</span>
-                                <p className="font-medium">{room.purchase_order?.cost_per_room ? formatCurrency(room.purchase_order.cost_per_room) : 'N/A'}</p>
+                                <span className="text-xs text-muted-foreground">Confirmation #:</span>
+                                <p className="font-medium">{room.purchase_order?.hotel_confirmation || 'N/A'}</p>
                               </div>
-                              {room.purchase_order?.notes && (
-                                <div className="col-span-2">
-                                  <span className="text-muted-foreground">Notes:</span>
-                                  <p className="font-medium text-xs">{room.purchase_order.notes}</p>
-                                </div>
-                              )}
                             </div>
+                            
+                            {/* Cost Analysis */}
+                            <div className="space-y-2">
+                              <p className="text-xs font-semibold text-muted-foreground">Cost Analysis</p>
+                              <div className="grid grid-cols-3 gap-3 text-sm">
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Estimated:</span>
+                                  <p className="font-medium">{formatCurrency(estimatedCostPerRoom)}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Actual:</span>
+                                  <p className="font-medium">{formatCurrency(actualCostPerRoom)}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Variance:</span>
+                                  <p className={`font-medium ${costVariance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                    {costVariance >= 0 ? '+' : ''}{formatCurrency(costVariance)}
+                                    {estimatedCostPerRoom > 0 && (
+                                      <span className="text-xs ml-1">
+                                        ({variancePercent >= 0 ? '+' : ''}{variancePercent.toFixed(1)}%)
+                                      </span>
+                                    )}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="grid grid-cols-2 gap-3 text-sm pt-2 border-t">
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Total Paid:</span>
+                                  <p className="font-bold text-primary">
+                                    {formatCurrency(room.purchase_order?.total_cost || 0)}
+                                  </p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-muted-foreground">Customer Price:</span>
+                                  <p className="font-bold text-green-600">
+                                    {formatCurrency(room.total_price)}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            {room.purchase_order?.notes && (
+                              <div className="mt-3 pt-3 border-t">
+                                <span className="text-xs text-muted-foreground">Notes:</span>
+                                <p className="font-medium text-xs mt-1">{room.purchase_order.notes}</p>
+                              </div>
+                            )}
                           </div>
-                        ))}
+                        )
+                        })}
                     </div>
                   </CardContent>
                 </Card>
               )}
+
+              {/* Payment Status */}
+              <Card className="border-green-200 bg-green-50/30 dark:bg-green-950/20">
+                <CardHeader className="py-3">
+                  <CardTitle className="text-sm font-medium flex items-center gap-2">
+                    <DollarSign className="h-4 w-4 text-green-600" />
+                    Payment Status
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="pb-3">
+                  <div className="space-y-3">
+                    {viewingBooking.rooms.map((room, idx) => {
+                      const paymentStatus = room.payment_status || 'pending'
+                      
+                      return (
+                        <div key={idx} className="p-3 border rounded-lg bg-white dark:bg-card">
+                          <div className="flex items-center justify-between mb-2">
+                            <div className="font-medium text-sm">{room.roomName} ({room.occupancy_type})</div>
+                            <Badge 
+                              variant={
+                                paymentStatus === 'paid' ? 'default' : 
+                                paymentStatus === 'overdue' ? 'destructive' : 
+                                'secondary'
+                              }
+                            >
+                              {paymentStatus === 'paid' && '✓ Paid'}
+                              {paymentStatus === 'pending' && '⏳ Pending'}
+                              {paymentStatus === 'overdue' && '⚠️ Overdue'}
+                              {paymentStatus === 'partial' && 'Partial'}
+                            </Badge>
+                          </div>
+                          
+                          <div className="text-sm text-muted-foreground">
+                            {room.contractName && (
+                              <div>Contract: {room.contractName}</div>
+                            )}
+                            <div className="font-medium text-foreground mt-1">
+                              Cost: {formatCurrency(room.estimated_cost_per_room || 0)} × {room.quantity} = {formatCurrency((room.estimated_cost_per_room || 0) * room.quantity)}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                    
+                    <div className="flex justify-between items-center p-3 bg-muted rounded-lg">
+                      <span className="font-semibold">Total Supplier Cost:</span>
+                      <span className="font-bold text-lg">
+                        {formatCurrency(viewingBooking.rooms.reduce((sum, room) => 
+                          sum + ((room.estimated_cost_per_room || 0) * room.quantity), 0
+                        ))}
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             </div>
           )}
 

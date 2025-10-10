@@ -4,7 +4,7 @@ import { createContext, useContext, useState, useEffect, ReactNode } from 'react
 export interface TourComponent {
   id: number
   tour_id: number
-  component_type: 'accommodation' | 'transfer' | 'activity' | 'meal'
+  component_type: 'accommodation' | 'transfer' | 'activity' | 'meal' | 'ticket' | 'other'
   
   // For accommodation components
   hotel_id?: number
@@ -14,15 +14,19 @@ export interface TourComponent {
   board_type?: BoardType
   
   // Pricing (per couple - 2 people)
-  pricing_mode: 'use_contract' | 'fixed_price'
+  pricing_mode: 'use_contract' | 'fixed_price' | 'use_service_inventory'
   fixed_cost_per_couple?: number
   fixed_sell_per_couple?: number
   
-  // For non-accommodation components
-  service_name?: string
+  // For service components (transfers, tickets, activities, meals)
+  service_inventory_id?: number      // Link to ServiceInventory (if using inventory)
+  service_name?: string              // Custom name (if not using inventory or override)
   provider?: string
-  cost_per_couple?: number
+  cost_per_couple?: number           // Manual pricing (if fixed_price mode)
   sell_per_couple?: number
+  inventory_source?: 'contract' | 'buy_to_order'  // How this service will be sourced
+  quantity_per_booking?: number      // e.g., 2 tickets per couple, 1 transfer per group
+  pricing_unit?: 'per_person' | 'per_vehicle' | 'per_group' | 'flat_rate'  // How pricing is calculated
   
   // Package structure
   included_in_base_price: boolean
@@ -103,8 +107,223 @@ export interface OccupancyRate {
   rate: number // Base rate for this occupancy
 }
 
+export type SupplierType = 'direct' | 'dmc' | 'wholesaler' | 'bedbank' | 'consolidator' | 'other'
+
+export interface Supplier {
+  id: number
+  name: string
+  type: SupplierType
+  contact_name?: string
+  contact_email?: string
+  contact_phone?: string
+  payment_terms?: string // e.g., "Net 30", "Prepayment", "Pay on Check-in"
+  default_currency?: string
+  website?: string
+  notes?: string
+  active: boolean
+}
+
+export type PaymentStatus = 'pending' | 'paid' | 'partial' | 'overdue'
+export type PaymentMethod = 'bank_transfer' | 'credit_card' | 'check' | 'cash' | 'other'
+export type PaymentType = 'contract' | 'booking' // Contract payment vs per-booking payment
+
+export type ServiceCategory = 'transfer' | 'activity' | 'ticket' | 'meal' | 'other'
+export type ServiceRequestStatus = 'pending_details' | 'pending_booking' | 'confirmed' | 'completed' | 'cancelled'
+export type ServicePricingUnit = 'per_person' | 'per_vehicle' | 'per_group' | 'flat_rate'
+export type ServiceDirection = 'one_way' | 'inbound' | 'outbound' | 'round_trip'
+
+// Service Inventory Type (like Hotel entity)
+// e.g., "F1 Grand Prix Tickets", "Airport Transfers", "Circuit Transfers"
+// Generic and reusable across tours - tour linking happens at contract/rate level
+export interface ServiceInventoryType {
+  id: number
+  name: string // e.g., "F1 Grand Prix Tickets", "Airport Transfers" (generic, reusable)
+  category: ServiceCategory // Main category: transfer, ticket, activity, meal, other
+  location?: string // e.g., "Abu Dhabi, UAE" or leave generic
+  description?: string
+  service_categories: ServiceCategoryItem[] // Like room_groups in Hotel (e.g., "Grandstand", "VIP Lounge", "Paddock Club")
+  active: boolean
+}
+
+// Service Category Item (like RoomGroup)
+// e.g., "Grandstand - Main Straight", "Private Sedan", "Shared Shuttle"
+export interface ServiceCategoryItem {
+  id: string
+  category_name: string // e.g., "Grandstand - Main Straight", "Private Sedan Transfer"
+  pricing_unit: ServicePricingUnit // How this service is priced
+  description?: string
+  features?: string
+  min_pax?: number
+  max_pax?: number
+}
+
+// Service Contract (like hotel Contract)
+export interface ServiceContract {
+  id: number
+  supplier_id: number
+  supplierName: string
+  inventory_type_id: number // Link to ServiceInventoryType (like hotel_id)
+  inventoryTypeName: string
+  tour_id?: number // OPTIONAL - link to specific tour (e.g., Abu Dhabi F1 GP 2025)
+  tourName?: string // Auto-populated from tour
+  contract_name: string
+  
+  // Date range
+  valid_from: string // ISO date
+  valid_to: string // ISO date
+  
+  // Allocation (for contracted services - like room_allocations)
+  service_allocations: ServiceAllocation[]
+  
+  // Pricing
+  pricing_strategy: 'per_unit' | 'tiered' // per_unit = flat rate, tiered = volume discounts
+  markup_percentage: number // e.g., 0.60 = 60% markup
+  tax_rate?: number // e.g., 0.05 = 5% VAT
+  service_fee?: number // Fixed fee per booking
+  
+  // Payment tracking
+  contracted_payment_total?: number
+  adjusted_payment_total?: number
+  adjustment_notes?: string
+  payment_schedule?: PaymentSchedule[]
+  
+  // Terms
+  cancellation_policy?: string
+  notes?: string
+  active: boolean
+}
+
+// Service Allocation (like RoomAllocation)
+export interface ServiceAllocation {
+  category_ids: string[] // References inventory_type.service_categories[].id
+  quantity: number // Number of units allocated (e.g., 100 shuttle seats, 50 tickets)
+  base_rate?: number // Base cost per unit for this allocation (optional - can set per category in rates)
+  label?: string // e.g., "F1 Weekend Block", "December Shuttles"
+}
+
+// Service Rate (like hotel Rate - generated from contracts or manual for buy-to-order)
+export interface ServiceRate {
+  id: number
+  contract_id?: number // Optional - null if buy-to-order estimate
+  contractName?: string
+  inventory_type_id: number // Link to ServiceInventoryType (like hotel_id)
+  inventoryTypeName: string
+  category_id: string // Link to ServiceCategoryItem (like room_group_id)
+  categoryName: string
+  tour_id?: number // OPTIONAL - link to tour (inherits from contract, or manual for buy-to-order)
+  tourName?: string // Auto-populated
+  
+  // Pricing
+  base_rate: number // Base cost per unit
+  pricing_unit: ServicePricingUnit // Inherited from category
+  markup_percentage: number
+  selling_price: number // Calculated: base_rate * (1 + markup)
+  currency: string
+  
+  // Direction (for transfers and other directional services)
+  direction?: ServiceDirection // e.g., 'inbound', 'outbound', 'round_trip', 'one_way'
+  paired_rate_id?: number // Optional: link to return journey rate
+  
+  // Inventory tracking (only for contracted services)
+  inventory_type: 'contract' | 'buy_to_order'
+  allocated_quantity?: number // Total allocated (if contract)
+  available_quantity?: number // Currently available (if contract)
+  
+  // Validity
+  valid_from: string
+  valid_to: string
+  
+  // Day-of-week availability (MWTTFSS)
+  days_of_week?: {
+    monday: boolean
+    tuesday: boolean
+    wednesday: boolean
+    thursday: boolean
+    friday: boolean
+    saturday: boolean
+    sunday: boolean
+  }
+  
+  // Status
+  active: boolean
+  inactive_reason?: string
+}
+
+export interface ServiceRequest {
+  id: number
+  booking_id: number
+  bookingRef: string
+  customerName: string
+  service_type: ServiceCategory
+  service_name: string
+  description?: string
+  
+  // Service-specific details (filled by operations)
+  details?: {
+    // For transfers
+    from?: string
+    to?: string
+    date?: string
+    time?: string
+    flight_number?: string
+    vehicle_type?: string // "Private Sedan", "Shared Shuttle", "Minibus"
+    
+    // For activities/tickets
+    venue?: string
+    event_date?: string
+    event_time?: string
+    ticket_type?: string
+    quantity?: number
+    
+    // Common
+    pax_count?: number
+    special_requirements?: string
+  }
+  
+  // Operations & Costs
+  status: ServiceRequestStatus
+  supplier_id?: number
+  supplierName?: string
+  estimated_cost?: number
+  actual_cost?: number
+  confirmation_number?: string
+  notes?: string
+  
+  // Dates
+  created_date: string
+  updated_date?: string
+}
+
+export interface Payment {
+  id: number
+  payment_type: PaymentType
+  supplier_id: number
+  supplierName: string
+  description?: string // e.g., "Deposit", "2nd Installment", "Final Balance"
+  
+  // For contract payments
+  contract_id?: number
+  contractName?: string
+  
+  // For booking payments
+  booking_ids?: number[] // Which bookings this payment covers
+  
+  // Payment details
+  amount: number // Actual amount being paid (this specific payment)
+  currency: string
+  due_date: string // ISO date - when payment is due
+  payment_date?: string // ISO date - when actually paid
+  status: PaymentStatus
+  payment_method?: PaymentMethod
+  reference_number?: string // Bank ref, check #, transaction ID
+  notes?: string
+  created_date: string // When payment record was created
+}
+
 export interface Contract {
   id: number
+  supplier_id: number
+  supplierName: string
   hotel_id: number
   hotelName: string
   contract_name: string
@@ -113,6 +332,10 @@ export interface Contract {
   total_rooms: number
   base_rate: number
   currency: string
+  
+  // Payment adjustments (for attrition/cancellations)
+  adjusted_payment_total?: number // Adjusted amount after releases/cancellations
+  adjustment_notes?: string // Why the adjustment was made
   
   // TOUR LINKING (optional - link contract to specific tours)
   tour_ids?: number[] // Optional: link to specific tours
@@ -178,6 +401,10 @@ export interface Rate {
   // RATE STRUCTURE
   rate: number // Base room rate for this occupancy
   board_cost?: number // Board cost (per person per night for contract, total for buy-to-order)
+  
+  // STATUS
+  active?: boolean // Whether this rate is available for booking (default: true)
+  inactive_reason?: string // Optional reason for inactivity
   
   // VALIDITY & RESTRICTIONS
   valid_from?: string // Validity start date (required for buy-to-order)
@@ -270,8 +497,10 @@ export interface BookingRoom {
   board_type: BoardType
   purchase_type: 'inventory' | 'buy_to_order'
   quantity: number // Number of this specific room type
+  guests_count?: number // Number of guests in this room
   price_per_room: number // Price per room for the entire stay
   total_price: number // quantity × price_per_room
+  estimated_cost_per_room?: number // Estimated cost per room (for buy-to-order variance tracking)
   // Purchase status for this room (for buy-to-order)
   purchase_status?: 'not_required' | 'pending_purchase' | 'purchased' | 'failed'
   purchase_order?: {
@@ -283,6 +512,9 @@ export interface BookingRoom {
     total_cost?: number
     notes?: string
   }
+  // Payment tracking
+  payment_status?: 'not_required' | 'pending' | 'paid' | 'partial' | 'overdue'
+  payment_ids?: number[] // IDs of payments that cover this room
   // Conversion tracking
   original_purchase_type?: 'buy_to_order'
   converted_from_buy_to_order?: boolean
@@ -296,6 +528,7 @@ export interface Booking {
   tourName: string
   customer_name: string
   customer_email: string
+  customer_phone: string
   // Date-based booking
   check_in_date: string // ISO format date
   check_out_date: string // ISO format date
@@ -313,11 +546,17 @@ interface DataContextType {
   tours: Tour[]
   tourComponents: TourComponent[]
   hotels: Hotel[]
+  suppliers: Supplier[]
   contracts: Contract[]
   rates: Rate[]
   stocks: Stock[]
   listings: Listing[]
   bookings: Booking[]
+  payments: Payment[]
+  serviceRequests: ServiceRequest[]
+  serviceInventoryTypes: ServiceInventoryType[]
+  serviceContracts: ServiceContract[]
+  serviceRates: ServiceRate[]
   recentActivity: Activity[]
   hotelLocations: string[]
   addTour: (tour: Omit<Tour, 'id'>) => void
@@ -329,7 +568,26 @@ interface DataContextType {
   addHotel: (hotel: Omit<Hotel, 'id'>) => void
   updateHotel: (id: number, hotel: Partial<Hotel>) => void
   deleteHotel: (id: number) => void
-  addContract: (contract: Omit<Contract, 'id' | 'hotelName'>) => void
+  addSupplier: (supplier: Omit<Supplier, 'id'>) => void
+  updateSupplier: (id: number, supplier: Partial<Supplier>) => void
+  deleteSupplier: (id: number) => void
+  addPayment: (payment: Omit<Payment, 'id' | 'supplierName' | 'contractName' | 'created_date'>) => void
+  updatePayment: (id: number, payment: Partial<Payment>) => void
+  deletePayment: (id: number) => void
+  recordPayment: (paymentId: number, paymentDate: string, paymentMethod: PaymentMethod, referenceNumber?: string) => void
+  addServiceRequest: (request: Omit<ServiceRequest, 'id' | 'bookingRef' | 'customerName' | 'created_date'>) => void
+  updateServiceRequest: (id: number, request: Partial<ServiceRequest>) => void
+  deleteServiceRequest: (id: number) => void
+  addServiceInventoryType: (inventoryType: Omit<ServiceInventoryType, 'id'>) => void
+  updateServiceInventoryType: (id: number, inventoryType: Partial<ServiceInventoryType>) => void
+  deleteServiceInventoryType: (id: number) => void
+  addServiceContract: (contract: Omit<ServiceContract, 'id' | 'supplierName' | 'inventoryTypeName' | 'tourName'>) => void
+  updateServiceContract: (id: number, contract: Partial<ServiceContract>) => void
+  deleteServiceContract: (id: number) => void
+  addServiceRate: (rate: Omit<ServiceRate, 'id' | 'contractName' | 'inventoryTypeName' | 'categoryName' | 'selling_price' | 'tourName'>) => void
+  updateServiceRate: (id: number, rate: Partial<ServiceRate>) => void
+  deleteServiceRate: (id: number) => void
+  addContract: (contract: Omit<Contract, 'id' | 'hotelName' | 'supplierName'>) => void
   updateContract: (id: number, contract: Partial<Contract>) => void
   deleteContract: (id: number) => void
   addRate: (rate: Omit<Rate, 'id' | 'contractName' | 'roomName'>) => void
@@ -420,6 +678,549 @@ const initialData = {
       start_date: "2025-10-15",
       end_date: "2025-10-20",
       description: "Discover the history and cuisine of Rome in the fall."
+    },
+    {
+      id: 3,
+      name: "Abu Dhabi F1 Grand Prix 2025",
+      start_date: "2025-12-04",
+      end_date: "2025-12-08",
+      description: "Experience the thrill of Formula 1 at Yas Marina Circuit with 4 nights accommodation, airport transfers, circuit transfers, and 3-day F1 tickets."
+    }
+  ],
+  payments: [],
+  serviceInventoryTypes: [
+    // F1 Grand Prix Tickets (Generic - reusable across all F1 events)
+    {
+      id: 1,
+      name: "F1 Grand Prix Tickets",
+      category: "ticket" as const,
+      location: "Various F1 Circuits",
+      description: "Official F1 Grand Prix tickets for all seating sections (reusable across all F1 events)",
+      service_categories: [
+        {
+          id: "f1-grandstand",
+          category_name: "Grandstand - Main Straight",
+          pricing_unit: "per_person" as const,
+          description: "3-day pass with excellent track views",
+          features: "Track view, F1 village access, big screen"
+        },
+        {
+          id: "f1-vip",
+          category_name: "VIP Lounge",
+          pricing_unit: "per_person" as const,
+          description: "Premium lounge with hospitality",
+          features: "Lounge access, catering, open bar, pit walk"
+        },
+        {
+          id: "f1-paddock",
+          category_name: "Paddock Club",
+          pricing_unit: "per_person" as const,
+          description: "Ultimate F1 experience with paddock access",
+          features: "Paddock access, gourmet dining, driver meet & greet, pit lane walk",
+          min_pax: 1,
+          max_pax: 10
+        }
+      ],
+      active: true
+    },
+    // Circuit Transfers (Generic - reusable for F1/concerts/events at Yas Marina)
+    {
+      id: 2,
+      name: "Yas Marina Circuit Transfers",
+      category: "transfer" as const,
+      location: "Abu Dhabi, UAE",
+      description: "Shuttle services between hotels and Yas Marina Circuit (reusable for F1, concerts, events)",
+      service_categories: [
+        {
+          id: "circuit-shared",
+          category_name: "Shared Shuttle Service",
+          pricing_unit: "per_person" as const,
+          description: "Scheduled shuttle service, multiple pickup points",
+          features: "Air-conditioned coach, 15-min frequency",
+          min_pax: 1,
+          max_pax: 50
+        },
+        {
+          id: "circuit-private",
+          category_name: "Private Transfer",
+          pricing_unit: "per_vehicle" as const,
+          description: "Private car service, door-to-door",
+          features: "Luxury sedan, professional driver, flexible timing",
+          min_pax: 1,
+          max_pax: 4
+        }
+      ],
+      active: true
+    },
+    // Airport Transfers (Generic - reusable across all UAE tours)
+    {
+      id: 3,
+      name: "Abu Dhabi Airport Transfers",
+      category: "transfer" as const,
+      location: "Abu Dhabi, UAE",
+      description: "Airport transfer services for all UAE tours (book via AtoB/Uber closer to date)",
+      service_categories: [
+        {
+          id: "airport-private",
+          category_name: "Private Sedan",
+          pricing_unit: "per_vehicle" as const,
+          description: "Private sedan for airport transfers",
+          features: "Sedan, air-conditioned, meet & greet",
+          min_pax: 1,
+          max_pax: 3
+        },
+        {
+          id: "airport-luxury",
+          category_name: "Luxury SUV",
+          pricing_unit: "per_vehicle" as const,
+          description: "Premium SUV for airport transfers",
+          features: "Luxury SUV, air-conditioned, meet & greet, WiFi",
+          min_pax: 1,
+          max_pax: 5
+        }
+      ],
+      active: true
+    }
+  ],
+  serviceContracts: [
+    // F1 Abu Dhabi 2025 - Grandstand Tickets Contract (pre-purchased 50 tickets)
+    {
+      id: 1,
+      supplier_id: 7,
+      supplierName: "F1 Experiences Middle East",
+      inventory_type_id: 1,
+      inventoryTypeName: "F1 Grand Prix Tickets",
+      tour_id: 3, // Linked to "Abu Dhabi F1 Grand Prix 2025"
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      contract_name: "F1 Abu Dhabi 2025 - Grandstand Block",
+      valid_from: "2025-12-05",
+      valid_to: "2025-12-07",
+      service_allocations: [
+        {
+          category_ids: ["f1-grandstand"],
+          quantity: 50,
+          base_rate: 400,
+          label: "Grandstand Main Straight - F1 Weekend"
+        }
+      ],
+      pricing_strategy: "per_unit" as const,
+      markup_percentage: 0.50, // 50% markup
+      tax_rate: 0.05, // 5% VAT
+      contracted_payment_total: 20000, // 50 tickets × $400
+      payment_schedule: [
+        { payment_date: "2025-06-01", amount_due: 10000, paid: false, notes: "Deposit 50%" },
+        { payment_date: "2025-11-01", amount_due: 10000, paid: false, notes: "Final balance" }
+      ],
+      notes: "50 Grandstand tickets for F1 weekend, issued 30 days before event",
+      active: true
+    },
+    // F1 Abu Dhabi 2025 - Circuit Shuttle Contract (pre-purchased 100 seats)
+    {
+      id: 2,
+      supplier_id: 6,
+      supplierName: "UAE Premium Transfers",
+      inventory_type_id: 2,
+      inventoryTypeName: "Yas Marina Circuit Transfers",
+      tour_id: 3, // Linked to "Abu Dhabi F1 Grand Prix 2025"
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      contract_name: "F1 Abu Dhabi 2025 - Shuttle Block",
+      valid_from: "2025-12-06",
+      valid_to: "2025-12-07",
+      service_allocations: [
+        {
+          category_ids: ["circuit-shared"],
+          quantity: 100,
+          base_rate: 30,
+          label: "Circuit Shuttle - Saturday & Sunday"
+        }
+      ],
+      pricing_strategy: "per_unit" as const,
+      markup_percentage: 0.40, // 40% markup
+      contracted_payment_total: 3000, // 100 seats × $30
+      payment_schedule: [
+        { payment_date: "2025-11-15", amount_due: 3000, paid: false, notes: "Full prepayment" }
+      ],
+      notes: "100 shuttle seats for Saturday and Sunday, round trip service",
+      active: true
+    }
+  ],
+  serviceRates: [
+    // F1 Abu Dhabi 2025 - Grandstand Tickets (Contract-based)
+    {
+      id: 1,
+      contract_id: 1,
+      contractName: "F1 Abu Dhabi 2025 - Grandstand Block",
+      inventory_type_id: 1,
+      inventoryTypeName: "F1 Grand Prix Tickets",
+      category_id: "f1-grandstand",
+      categoryName: "Grandstand - Main Straight",
+      tour_id: 3, // Inherited from contract
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      base_rate: 400,
+      pricing_unit: "per_person" as const,
+      markup_percentage: 0.50,
+      selling_price: 600, // $400 × 1.5
+      currency: "USD",
+      inventory_type: "contract" as const,
+      allocated_quantity: 50,
+      available_quantity: 28, // 22 sold
+      valid_from: "2025-12-05",
+      valid_to: "2025-12-07",
+      days_of_week: {
+        monday: false,
+        tuesday: false,
+        wednesday: false,
+        thursday: false,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // F1 Abu Dhabi 2025 - VIP Lounge (Buy-to-Order, no contract)
+    {
+      id: 2,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 1,
+      inventoryTypeName: "F1 Grand Prix Tickets",
+      category_id: "f1-vip",
+      categoryName: "VIP Lounge",
+      tour_id: 3, // Manually set for Abu Dhabi F1 2025
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      base_rate: 1500,
+      pricing_unit: "per_person" as const,
+      markup_percentage: 0.40,
+      selling_price: 2100,
+      currency: "USD",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-05",
+      valid_to: "2025-12-07",
+      days_of_week: {
+        monday: false,
+        tuesday: false,
+        wednesday: false,
+        thursday: false,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // F1 Abu Dhabi 2025 - Paddock Club (Buy-to-Order, no contract - exclusive)
+    {
+      id: 3,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 1,
+      inventoryTypeName: "F1 Grand Prix Tickets",
+      category_id: "f1-paddock",
+      categoryName: "Paddock Club",
+      tour_id: 3, // Manually set for Abu Dhabi F1 2025
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      base_rate: 2500,
+      pricing_unit: "per_person" as const,
+      markup_percentage: 0.30,
+      selling_price: 3250,
+      currency: "USD",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-05",
+      valid_to: "2025-12-07",
+      days_of_week: {
+        monday: false,
+        tuesday: false,
+        wednesday: false,
+        thursday: false,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // F1 Abu Dhabi 2025 - Circuit Shuttle (Contract-based, round trip)
+    {
+      id: 4,
+      contract_id: 2,
+      contractName: "F1 Abu Dhabi 2025 - Shuttle Block",
+      inventory_type_id: 2,
+      inventoryTypeName: "Yas Marina Circuit Transfers",
+      category_id: "circuit-shared",
+      categoryName: "Shared Shuttle Service",
+      tour_id: 3, // Inherited from contract
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      direction: "round_trip" as const, // Includes both ways to/from circuit
+      base_rate: 30,
+      pricing_unit: "per_person" as const,
+      markup_percentage: 0.40,
+      selling_price: 42,
+      currency: "AED",
+      inventory_type: "contract" as const,
+      allocated_quantity: 100,
+      available_quantity: 73, // 27 sold
+      valid_from: "2025-12-06",
+      valid_to: "2025-12-07",
+      days_of_week: {
+        monday: false,
+        tuesday: false,
+        wednesday: false,
+        thursday: false,
+        friday: false,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // F1 Abu Dhabi 2025 - Circuit Private Transfer (Buy-to-Order, round trip)
+    {
+      id: 5,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 2,
+      inventoryTypeName: "Yas Marina Circuit Transfers",
+      category_id: "circuit-private",
+      categoryName: "Private Transfer",
+      tour_id: 3, // Manually set for Abu Dhabi F1 2025
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      direction: "round_trip" as const, // Round trip to/from circuit
+      base_rate: 60,
+      pricing_unit: "per_vehicle" as const,
+      markup_percentage: 0.50,
+      selling_price: 90,
+      currency: "AED",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-06",
+      valid_to: "2025-12-07",
+      days_of_week: {
+        monday: false,
+        tuesday: false,
+        wednesday: false,
+        thursday: false,
+        friday: false,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // Airport Transfer - Private Sedan - Arrival (Buy-to-Order, no contract, no tour - generic)
+    {
+      id: 6,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 3,
+      inventoryTypeName: "Abu Dhabi Airport Transfers",
+      category_id: "airport-private",
+      categoryName: "Private Sedan",
+      tour_id: undefined, // Generic - usable across all tours
+      tourName: undefined,
+      direction: "inbound" as const,
+      paired_rate_id: 8, // Linked to departure transfer
+      base_rate: 80,
+      pricing_unit: "per_vehicle" as const,
+      markup_percentage: 0.50,
+      selling_price: 120,
+      currency: "AED",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-01",
+      valid_to: "2025-12-31",
+      days_of_week: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // Airport Transfer - Luxury SUV - Arrival (Buy-to-Order, generic)
+    {
+      id: 7,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 3,
+      inventoryTypeName: "Abu Dhabi Airport Transfers",
+      category_id: "airport-luxury",
+      categoryName: "Luxury SUV",
+      tour_id: undefined, // Generic - usable across all tours
+      tourName: undefined,
+      direction: "inbound" as const,
+      paired_rate_id: 9, // Linked to departure transfer
+      base_rate: 150,
+      pricing_unit: "per_vehicle" as const,
+      markup_percentage: 0.40,
+      selling_price: 210,
+      currency: "AED",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-01",
+      valid_to: "2025-12-31",
+      days_of_week: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // Airport Transfer - Private Sedan - Departure (paired with id: 6)
+    {
+      id: 8,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 3,
+      inventoryTypeName: "Abu Dhabi Airport Transfers",
+      category_id: "airport-private",
+      categoryName: "Private Sedan",
+      tour_id: undefined,
+      tourName: undefined,
+      direction: "outbound" as const,
+      paired_rate_id: 6, // Linked to arrival transfer
+      base_rate: 80,
+      pricing_unit: "per_vehicle" as const,
+      markup_percentage: 0.50,
+      selling_price: 120,
+      currency: "AED",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-01",
+      valid_to: "2025-12-31",
+      days_of_week: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    },
+    // Airport Transfer - Luxury SUV - Departure (paired with id: 7)
+    {
+      id: 9,
+      contract_id: undefined,
+      contractName: "",
+      inventory_type_id: 3,
+      inventoryTypeName: "Abu Dhabi Airport Transfers",
+      category_id: "airport-luxury",
+      categoryName: "Luxury SUV",
+      tour_id: undefined,
+      tourName: undefined,
+      direction: "outbound" as const,
+      paired_rate_id: 7, // Linked to arrival transfer
+      base_rate: 150,
+      pricing_unit: "per_vehicle" as const,
+      markup_percentage: 0.40,
+      selling_price: 210,
+      currency: "AED",
+      inventory_type: "buy_to_order" as const,
+      valid_from: "2025-12-01",
+      valid_to: "2025-12-31",
+      days_of_week: {
+        monday: true,
+        tuesday: true,
+        wednesday: true,
+        thursday: true,
+        friday: true,
+        saturday: true,
+        sunday: true
+      },
+      active: true
+    }
+  ],
+  suppliers: [
+    {
+      id: 1,
+      name: "Direct - Hotel Le Champs",
+      type: "direct" as const,
+      contact_name: "Pierre Dubois",
+      contact_email: "reservations@hotellechamps.fr",
+      contact_phone: "+33 1 42 65 78 90",
+      payment_terms: "Net 30",
+      default_currency: "EUR",
+      website: "www.hotellechamps.fr",
+      notes: "Direct contract with hotel, preferred partner",
+      active: true
+    },
+    {
+      id: 2,
+      name: "Direct - Roma Palace",
+      type: "direct" as const,
+      contact_name: "Marco Rossi",
+      contact_email: "booking@romapalace.it",
+      contact_phone: "+39 06 678 90 12",
+      payment_terms: "Prepayment",
+      default_currency: "EUR",
+      website: "www.romapalace.it",
+      notes: "Direct contract, requires prepayment",
+      active: true
+    },
+    {
+      id: 3,
+      name: "Hotelbeds",
+      type: "bedbank" as const,
+      contact_name: "Sarah Johnson",
+      contact_email: "partners@hotelbeds.com",
+      contact_phone: "+1 305 555 0123",
+      payment_terms: "Net 45",
+      default_currency: "USD",
+      website: "www.hotelbeds.com",
+      notes: "Global bedbank, good rates for volume",
+      active: true
+    },
+    {
+      id: 4,
+      name: "Paris DMC Services",
+      type: "dmc" as const,
+      contact_name: "Amelie Laurent",
+      contact_email: "contracts@parisdmc.fr",
+      contact_phone: "+33 1 55 67 89 01",
+      payment_terms: "Net 30",
+      default_currency: "EUR",
+      website: "www.parisdmc.fr",
+      notes: "Local DMC for Paris, excellent service",
+      active: true
+    },
+    {
+      id: 5,
+      name: "Yas Island Hotels",
+      type: "direct" as const,
+      contact_name: "Ahmed Al Mansouri",
+      contact_email: "reservations@yashotels.ae",
+      contact_phone: "+971 2 656 0000",
+      payment_terms: "Net 30",
+      default_currency: "AED",
+      website: "www.yashotels.ae",
+      notes: "Direct contract for Yas Island properties",
+      active: true
+    },
+    {
+      id: 6,
+      name: "UAE Premium Transfers",
+      type: "dmc" as const,
+      contact_name: "Mohammed Hassan",
+      contact_email: "bookings@uaetransfers.ae",
+      contact_phone: "+971 50 123 4567",
+      payment_terms: "Prepayment",
+      default_currency: "AED",
+      website: "www.uaetransfers.ae",
+      notes: "Premium transfer services in Abu Dhabi and Dubai",
+      active: true
+    },
+    {
+      id: 7,
+      name: "F1 Experiences Middle East",
+      type: "consolidator" as const,
+      contact_name: "Sarah Williams",
+      contact_email: "partners@f1experiences.com",
+      contact_phone: "+44 20 7123 4567",
+      payment_terms: "Net 60",
+      default_currency: "USD",
+      website: "www.f1experiences.com",
+      notes: "Official F1 ticket and hospitality provider",
+      active: true
     }
   ],
   hotels: [
@@ -465,11 +1266,38 @@ const initialData = {
           features: "Wi‑Fi, TV, minibar, safe"
         }
       ]
+    },
+    {
+      id: 4,
+      name: "Yas Hotel Abu Dhabi",
+      location: "Abu Dhabi, AE",
+      city: "Abu Dhabi",
+      country: "United Arab Emirates",
+      description: "Iconic 5-star hotel on Yas Island, straddling the F1 circuit with direct access to Yas Marina Circuit.",
+      star_rating: 5,
+      room_groups: [
+        {
+          id: "rg-yas-1",
+          room_type: "Superior Room",
+          capacity: 2,
+          description: "Modern room with marina or track views, king or twin beds.",
+          features: "Wi-Fi, smart TV, minibar, safe, coffee machine, rain shower"
+        },
+        {
+          id: "rg-yas-2",
+          room_type: "Deluxe Room Track View",
+          capacity: 2,
+          description: "Premium room with direct views of the F1 circuit.",
+          features: "Wi-Fi, smart TV, minibar, safe, Nespresso machine, premium bathroom amenities, balcony"
+        }
+      ]
     }
   ],
   contracts: [
     {
       id: 1,
+      supplier_id: 1,
+      supplierName: "Direct - Hotel Le Champs",
       hotel_id: 1,
       hotelName: "Hotel Le Champs",
       contract_name: "May 2025 Block",
@@ -667,7 +1495,8 @@ const initialData = {
   hotelLocations: [
     "Paris, FR",
     "Rome, IT",
-    "London, UK"
+    "London, UK",
+    "Abu Dhabi, AE"
   ],
   bookings: [
     {
@@ -676,6 +1505,7 @@ const initialData = {
       tourName: "Spring in Paris",
       customer_name: "John Smith",
       customer_email: "john.smith@example.com",
+      customer_phone: "+1 555-123-4567",
       check_in_date: "2025-05-05",
       check_out_date: "2025-05-07",
       nights: 2,
@@ -698,6 +1528,261 @@ const initialData = {
       total_price: 280,
       booking_date: "2025-01-15",
       status: "confirmed" as const,
+    },
+    {
+      id: 2,
+      tour_id: 3,
+      tourName: "Abu Dhabi F1 Grand Prix 2025",
+      customer_name: "Michael Rodriguez",
+      customer_email: "michael.rodriguez@example.com",
+      customer_phone: "+1 555-987-6543",
+      check_in_date: "2025-12-04",
+      check_out_date: "2025-12-08",
+      nights: 4,
+      rooms: [
+        {
+          listing_id: 0,
+          rate_id: 0,
+          hotelName: "Yas Hotel Abu Dhabi",
+          roomName: "Deluxe Room Track View",
+          contractName: "F1 Weekend Block",
+          occupancy_type: "double" as const,
+          board_type: "bed_breakfast" as const,
+          purchase_type: "inventory" as const,
+          quantity: 1,
+          price_per_room: 450,
+          total_price: 1800,
+          purchase_status: "not_required" as const,
+          guests_count: 2
+        }
+      ],
+      total_price: 3750, // Hotel (1800) + Transfers (370) + Tickets (1200) + margin
+      booking_date: "2025-01-20",
+      status: "confirmed" as const,
+    }
+  ],
+  serviceRequests: [
+    // Mock service requests for F1 tour booking
+    {
+      id: 1,
+      booking_id: 2,
+      bookingRef: 'BK-2025-002',
+      customerName: 'Michael Rodriguez',
+      service_type: 'transfer' as const,
+      service_name: 'Airport Transfer - Arrival (Abu Dhabi Airport to Yas Hotel)',
+      description: 'Private transfer from airport to hotel',
+      details: {
+        from: 'Abu Dhabi International Airport',
+        to: 'Yas Hotel Abu Dhabi',
+        date: '2025-12-04',
+        time: '14:30',
+        flight_number: 'EY123',
+        vehicle_type: 'Private Sedan',
+        pax_count: 2,
+        special_requirements: ''
+      },
+      status: 'pending_details' as const,
+      supplier_id: 6,
+      supplierName: 'UAE Premium Transfers',
+      estimated_cost: 80,
+      created_date: '2025-01-20',
+      notes: ''
+    },
+    {
+      id: 2,
+      booking_id: 2,
+      bookingRef: 'BK-2025-002',
+      customerName: 'Michael Rodriguez',
+      service_type: 'transfer' as const,
+      service_name: 'Airport Transfer - Departure (Yas Hotel to Abu Dhabi Airport)',
+      description: 'Private transfer from hotel to airport',
+      details: {
+        from: 'Yas Hotel Abu Dhabi',
+        to: 'Abu Dhabi International Airport',
+        date: '2025-12-08',
+        time: '',
+        flight_number: '',
+        vehicle_type: 'Private Sedan',
+        pax_count: 2,
+        special_requirements: ''
+      },
+      status: 'pending_details' as const,
+      supplier_id: 6,
+      supplierName: 'UAE Premium Transfers',
+      estimated_cost: 80,
+      created_date: '2025-01-20',
+      notes: 'Flight details pending - customer will provide closer to date'
+    },
+    {
+      id: 3,
+      booking_id: 2,
+      bookingRef: 'BK-2025-002',
+      customerName: 'Michael Rodriguez',
+      service_type: 'transfer' as const,
+      service_name: 'Circuit Transfer - Saturday (Hotel to Yas Marina Circuit)',
+      description: 'Round trip transfer to F1 circuit for qualifying',
+      details: {
+        from: 'Yas Hotel Abu Dhabi',
+        to: 'Yas Marina Circuit',
+        date: '2025-12-06',
+        time: '12:00',
+        vehicle_type: 'Private Sedan',
+        pax_count: 2,
+        special_requirements: 'VIP entrance preferred'
+      },
+      status: 'confirmed' as const,
+      supplier_id: 6,
+      supplierName: 'UAE Premium Transfers',
+      estimated_cost: 40,
+      actual_cost: 35,
+      confirmation_number: 'UAE-TRF-12345',
+      created_date: '2025-01-20',
+      updated_date: '2025-01-22',
+      notes: 'Confirmed with supplier - driver will wait at hotel lobby'
+    },
+    {
+      id: 4,
+      booking_id: 2,
+      bookingRef: 'BK-2025-002',
+      customerName: 'Michael Rodriguez',
+      service_type: 'transfer' as const,
+      service_name: 'Circuit Transfer - Sunday (Hotel to Yas Marina Circuit)',
+      description: 'Round trip transfer to F1 circuit for race day',
+      details: {
+        from: 'Yas Hotel Abu Dhabi',
+        to: 'Yas Marina Circuit',
+        date: '2025-12-07',
+        time: '11:00',
+        vehicle_type: 'Private Sedan',
+        pax_count: 2,
+        special_requirements: 'Race day - early pickup requested'
+      },
+      status: 'pending_booking' as const,
+      supplier_id: 6,
+      supplierName: 'UAE Premium Transfers',
+      estimated_cost: 40,
+      created_date: '2025-01-20',
+      notes: 'Awaiting supplier confirmation for race day'
+    },
+    {
+      id: 5,
+      booking_id: 2,
+      bookingRef: 'BK-2025-002',
+      customerName: 'Michael Rodriguez',
+      service_type: 'ticket' as const,
+      service_name: 'F1 Abu Dhabi GP - 3-Day Grandstand Ticket (Fri-Sat-Sun)',
+      description: 'F1 event tickets for 3 days including Friday practice, Saturday qualifying, and Sunday race',
+      details: {
+        venue: 'Yas Marina Circuit',
+        event_date: '2025-12-05',
+        event_time: '13:00',
+        ticket_type: 'Grandstand - Main Straight',
+        quantity: 2,
+        pax_count: 2,
+        special_requirements: 'Seats together preferred'
+      },
+      status: 'pending_booking' as const,
+      supplier_id: 7,
+      supplierName: 'F1 Experiences Middle East',
+      estimated_cost: 800,
+      created_date: '2025-01-20',
+      notes: 'Tickets to be issued 30 days before event'
+    }
+  ],
+  tourComponents: [
+    // Abu Dhabi F1 Grand Prix 2025 Components
+    {
+      id: 1,
+      tour_id: 3,
+      component_type: "accommodation" as const,
+      hotel_id: 4,
+      room_group_id: "rg-yas-2",
+      check_in_day: 1, // Dec 4, 2025 (tour start)
+      nights: 4,
+      board_type: "bed_breakfast" as const,
+      pricing_mode: "use_contract" as const,
+      included_in_base_price: true,
+      label: "Yas Hotel Abu Dhabi - Track View"
+    },
+    {
+      id: 2,
+      tour_id: 3,
+      component_type: "transfer" as const,
+      service_name: "Airport Transfer - Arrival (Abu Dhabi Airport to Yas Hotel)",
+      provider: "UAE Premium Transfers",
+      check_in_day: 1, // Dec 4, 2025
+      pricing_mode: "fixed_price" as const,
+      cost_per_couple: 80, // AED 80 per couple (one-way)
+      sell_per_couple: 120, // AED 120 per couple
+      inventory_source: "buy_to_order" as const,
+      quantity_per_booking: 1, // 1 vehicle per couple
+      pricing_unit: "per_vehicle" as const,
+      included_in_base_price: true,
+      label: "Airport Transfer - Arrival"
+    },
+    {
+      id: 3,
+      tour_id: 3,
+      component_type: "transfer" as const,
+      service_name: "Airport Transfer - Departure (Yas Hotel to Abu Dhabi Airport)",
+      provider: "UAE Premium Transfers",
+      check_in_day: 5, // Dec 8, 2025 (checkout day)
+      pricing_mode: "fixed_price" as const,
+      cost_per_couple: 80,
+      sell_per_couple: 120,
+      inventory_source: "buy_to_order" as const,
+      quantity_per_booking: 1,
+      pricing_unit: "per_vehicle" as const,
+      included_in_base_price: true,
+      label: "Airport Transfer - Departure"
+    },
+    {
+      id: 4,
+      tour_id: 3,
+      component_type: "transfer" as const,
+      service_name: "Circuit Transfer - Saturday (Hotel to Yas Marina Circuit)",
+      provider: "UAE Premium Transfers",
+      check_in_day: 3, // Dec 6, 2025 (Saturday)
+      pricing_mode: "fixed_price" as const,
+      cost_per_couple: 40, // Round trip
+      sell_per_couple: 65,
+      inventory_source: "buy_to_order" as const,
+      quantity_per_booking: 1,
+      pricing_unit: "per_vehicle" as const,
+      included_in_base_price: true,
+      label: "Circuit Transfer - Saturday (Qualifying)"
+    },
+    {
+      id: 5,
+      tour_id: 3,
+      component_type: "transfer" as const,
+      service_name: "Circuit Transfer - Sunday (Hotel to Yas Marina Circuit)",
+      provider: "UAE Premium Transfers",
+      check_in_day: 4, // Dec 7, 2025 (Sunday - Race Day)
+      pricing_mode: "fixed_price" as const,
+      cost_per_couple: 40,
+      sell_per_couple: 65,
+      inventory_source: "buy_to_order" as const,
+      quantity_per_booking: 1,
+      pricing_unit: "per_vehicle" as const,
+      included_in_base_price: true,
+      label: "Circuit Transfer - Sunday (Race Day)"
+    },
+    {
+      id: 6,
+      tour_id: 3,
+      component_type: "ticket" as const,
+      service_name: "F1 Abu Dhabi GP - 3-Day Grandstand Ticket (Fri-Sat-Sun)",
+      provider: "F1 Experiences Middle East",
+      check_in_day: 2, // Dec 5, 2025 (Friday - event starts)
+      pricing_mode: "fixed_price" as const,
+      cost_per_couple: 800, // USD 800 for 2 tickets (3-day pass)
+      sell_per_couple: 1200, // USD 1200 for 2 tickets
+      inventory_source: "buy_to_order" as const,
+      quantity_per_booking: 2, // 2 tickets per couple
+      pricing_unit: "per_person" as const,
+      included_in_base_price: true,
+      label: "F1 Grandstand Tickets - 3 Days"
     }
   ]
 }
@@ -706,11 +1791,17 @@ const initialData = {
 const STORAGE_KEYS = {
   tours: 'tours-inventory-tours',
   hotels: 'tours-inventory-hotels',
+  suppliers: 'tours-inventory-suppliers',
   contracts: 'tours-inventory-contracts',
   rates: 'tours-inventory-rates',
   stocks: 'tours-inventory-stocks',
   listings: 'tours-inventory-listings',
   bookings: 'tours-inventory-bookings',
+  payments: 'tours-inventory-payments',
+  serviceRequests: 'tours-inventory-service-requests',
+  serviceInventoryTypes: 'tours-inventory-service-inventory-types',
+  serviceContracts: 'tours-inventory-service-contracts',
+  serviceRates: 'tours-inventory-service-rates',
 }
 
 // Load from localStorage with fallback
@@ -735,14 +1826,20 @@ function saveToStorage<T>(key: string, data: T): void {
 export function DataProvider({ children }: { children: ReactNode }) {
   const [tours, setToursState] = useState<Tour[]>(() => loadFromStorage(STORAGE_KEYS.tours, initialData.tours))
   const [hotels, setHotelsState] = useState<Hotel[]>(() => loadFromStorage(STORAGE_KEYS.hotels, initialData.hotels))
+  const [suppliers, setSuppliersState] = useState<Supplier[]>(() => loadFromStorage(STORAGE_KEYS.suppliers, initialData.suppliers))
   const [contracts, setContractsState] = useState<Contract[]>(() => loadFromStorage(STORAGE_KEYS.contracts, initialData.contracts))
   const [rates, setRatesState] = useState<Rate[]>(() => loadFromStorage(STORAGE_KEYS.rates, initialData.rates))
   // Stock state deprecated - keeping for backward compatibility but returning empty array
   const [stocks] = useState<Stock[]>([])
   const [listings, setListingsState] = useState<Listing[]>(() => loadFromStorage(STORAGE_KEYS.listings, initialData.listings))
   const [bookings, setBookingsState] = useState<Booking[]>(() => loadFromStorage(STORAGE_KEYS.bookings, initialData.bookings))
+  const [payments, setPaymentsState] = useState<Payment[]>(() => loadFromStorage(STORAGE_KEYS.payments, initialData.payments))
+  const [serviceRequests, setServiceRequestsState] = useState<ServiceRequest[]>(() => loadFromStorage(STORAGE_KEYS.serviceRequests, initialData.serviceRequests))
+  const [serviceInventoryTypes, setServiceInventoryTypesState] = useState<ServiceInventoryType[]>(() => loadFromStorage(STORAGE_KEYS.serviceInventoryTypes, initialData.serviceInventoryTypes))
+  const [serviceContracts, setServiceContractsState] = useState<ServiceContract[]>(() => loadFromStorage(STORAGE_KEYS.serviceContracts, initialData.serviceContracts))
+  const [serviceRates, setServiceRatesState] = useState<ServiceRate[]>(() => loadFromStorage(STORAGE_KEYS.serviceRates, initialData.serviceRates))
   const [conversionHistory, setConversionHistory] = useState<ConversionHistory[]>([])
-  const [tourComponents, setTourComponentsState] = useState<TourComponent[]>(() => loadFromStorage('tourComponents', []))
+  const [tourComponents, setTourComponentsState] = useState<TourComponent[]>(() => loadFromStorage('tourComponents', initialData.tourComponents))
 
   // Fix existing rates that are missing roomName or hotelName (migration)
   useEffect(() => {
@@ -788,6 +1885,14 @@ export function DataProvider({ children }: { children: ReactNode }) {
     })
   }
 
+  const setSuppliers = (data: Supplier[] | ((prev: Supplier[]) => Supplier[])) => {
+    setSuppliersState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.suppliers, next)
+      return next
+    })
+  }
+
   const setContracts = (data: Contract[] | ((prev: Contract[]) => Contract[])) => {
     setContractsState(prev => {
       const next = typeof data === 'function' ? data(prev) : data
@@ -823,6 +1928,46 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setBookingsState(prev => {
       const next = typeof data === 'function' ? data(prev) : data
       saveToStorage(STORAGE_KEYS.bookings, next)
+      return next
+    })
+  }
+
+  const setPayments = (data: Payment[] | ((prev: Payment[]) => Payment[])) => {
+    setPaymentsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.payments, next)
+      return next
+    })
+  }
+
+  const setServiceRequests = (data: ServiceRequest[] | ((prev: ServiceRequest[]) => ServiceRequest[])) => {
+    setServiceRequestsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.serviceRequests, next)
+      return next
+    })
+  }
+
+  const setServiceInventoryTypes = (data: ServiceInventoryType[] | ((prev: ServiceInventoryType[]) => ServiceInventoryType[])) => {
+    setServiceInventoryTypesState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.serviceInventoryTypes, next)
+      return next
+    })
+  }
+
+  const setServiceContracts = (data: ServiceContract[] | ((prev: ServiceContract[]) => ServiceContract[])) => {
+    setServiceContractsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.serviceContracts, next)
+      return next
+    })
+  }
+
+  const setServiceRates = (data: ServiceRate[] | ((prev: ServiceRate[]) => ServiceRate[])) => {
+    setServiceRatesState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.serviceRates, next)
       return next
     })
   }
@@ -879,13 +2024,213 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setHotels(hotels.filter(h => h.id !== id))
   }
 
+  // Supplier CRUD
+  const addSupplier = (supplier: Omit<Supplier, 'id'>) => {
+    const newSupplier = { ...supplier, id: Math.max(...suppliers.map(s => s.id), 0) + 1 }
+    setSuppliers([...suppliers, newSupplier])
+  }
+
+  const updateSupplier = (id: number, supplier: Partial<Supplier>) => {
+    setSuppliers(suppliers.map(s => s.id === id ? { ...s, ...supplier } : s))
+  }
+
+  const deleteSupplier = (id: number) => {
+    setSuppliers(suppliers.filter(s => s.id !== id))
+  }
+
+  // Payment CRUD
+  const addPayment = (payment: Omit<Payment, 'id' | 'supplierName' | 'contractName' | 'created_date'>) => {
+    const supplier = suppliers.find(s => s.id === payment.supplier_id)
+    const contract = payment.contract_id ? contracts.find(c => c.id === payment.contract_id) : null
+    
+    const newPayment: Payment = {
+      ...payment,
+      id: Math.max(...payments.map(p => p.id), 0) + 1,
+      supplierName: supplier?.name || '',
+      contractName: contract?.contract_name,
+      created_date: new Date().toISOString().split('T')[0]
+    }
+    setPayments([...payments, newPayment])
+    
+    // NOTE: We do NOT auto-update booking payment status here
+    // Payment status is tracked separately and updated manually
+    // This gives flexibility for partial payments, renegotiated terms, etc.
+  }
+
+  const updatePayment = (id: number, payment: Partial<Payment>) => {
+    setPayments(payments.map(p => p.id === id ? { ...p, ...payment } : p))
+    
+    // NOTE: Payment status updates are manual, not automatic
+    // This allows for flexible payment arrangements
+  }
+
+  const deletePayment = (id: number) => {
+    // Simply delete the payment record
+    // No automatic status updates to bookings
+    setPayments(payments.filter(p => p.id !== id))
+  }
+
+  const recordPayment = (paymentId: number, paymentDate: string, paymentMethod: PaymentMethod, referenceNumber?: string) => {
+    updatePayment(paymentId, {
+      payment_date: paymentDate,
+      payment_method: paymentMethod,
+      reference_number: referenceNumber,
+      status: 'paid'
+    })
+  }
+
+  // Service Request CRUD
+  const addServiceRequest = (request: Omit<ServiceRequest, 'id' | 'bookingRef' | 'customerName' | 'created_date'>) => {
+    const booking = bookings.find(b => b.id === request.booking_id)
+    const newRequest: ServiceRequest = {
+      ...request,
+      id: Math.max(...serviceRequests.map(sr => sr.id), 0) + 1,
+      bookingRef: `BK${request.booking_id.toString().padStart(4, '0')}`,
+      customerName: booking?.customer_name || '',
+      created_date: new Date().toISOString().split('T')[0]
+    }
+    setServiceRequests([...serviceRequests, newRequest])
+  }
+
+  const updateServiceRequest = (id: number, request: Partial<ServiceRequest>) => {
+    setServiceRequests(serviceRequests.map(sr => sr.id === id ? { ...sr, ...request } : sr))
+  }
+
+  const deleteServiceRequest = (id: number) => {
+    setServiceRequests(serviceRequests.filter(sr => sr.id !== id))
+  }
+
+  // Service Inventory Type CRUD (like Hotel CRUD)
+  const addServiceInventoryType = (inventoryType: Omit<ServiceInventoryType, 'id'>) => {
+    const newInventoryType: ServiceInventoryType = {
+      ...inventoryType,
+      id: Math.max(...serviceInventoryTypes.map(sit => sit.id), 0) + 1
+    }
+    setServiceInventoryTypes([...serviceInventoryTypes, newInventoryType])
+  }
+
+  const updateServiceInventoryType = (id: number, inventoryType: Partial<ServiceInventoryType>) => {
+    setServiceInventoryTypes(serviceInventoryTypes.map(sit => 
+      sit.id === id ? { ...sit, ...inventoryType } : sit
+    ))
+  }
+
+  const deleteServiceInventoryType = (id: number) => {
+    setServiceInventoryTypes(serviceInventoryTypes.filter(sit => sit.id !== id))
+  }
+
+  // Service Contract CRUD
+  const addServiceContract = (contract: Omit<ServiceContract, 'id' | 'supplierName' | 'inventoryTypeName' | 'tourName'>) => {
+    const supplier = suppliers.find(s => s.id === contract.supplier_id)
+    const inventoryType = serviceInventoryTypes.find(sit => sit.id === contract.inventory_type_id)
+    const tour = contract.tour_id ? tours.find(t => t.id === contract.tour_id) : null
+    const newContract: ServiceContract = {
+      ...contract,
+      id: Math.max(...serviceContracts.map(sc => sc.id), 0) + 1,
+      supplierName: supplier?.name || '',
+      inventoryTypeName: inventoryType?.name || '',
+      tourName: tour?.name || undefined
+    }
+    setServiceContracts([...serviceContracts, newContract])
+  }
+
+  const updateServiceContract = (id: number, contract: Partial<ServiceContract>) => {
+    setServiceContracts(serviceContracts.map(sc => {
+      if (sc.id === id) {
+        const updated = { ...sc, ...contract }
+        // Update names if IDs changed
+        if (contract.supplier_id) {
+          const supplier = suppliers.find(s => s.id === contract.supplier_id)
+          updated.supplierName = supplier?.name || updated.supplierName
+        }
+        if (contract.inventory_type_id) {
+          const inventoryType = serviceInventoryTypes.find(sit => sit.id === contract.inventory_type_id)
+          updated.inventoryTypeName = inventoryType?.name || updated.inventoryTypeName
+        }
+        if (contract.tour_id !== undefined) {
+          const tour = contract.tour_id ? tours.find(t => t.id === contract.tour_id) : null
+          updated.tourName = tour?.name || undefined
+        }
+        return updated
+      }
+      return sc
+    }))
+  }
+
+  const deleteServiceContract = (id: number) => {
+    setServiceContracts(serviceContracts.filter(sc => sc.id !== id))
+  }
+
+  // Service Rate CRUD
+  const addServiceRate = (rate: Omit<ServiceRate, 'id' | 'contractName' | 'inventoryTypeName' | 'categoryName' | 'selling_price' | 'tourName'>) => {
+    const contract = rate.contract_id ? serviceContracts.find(sc => sc.id === rate.contract_id) : null
+    const inventoryType = serviceInventoryTypes.find(sit => sit.id === rate.inventory_type_id)
+    const category = inventoryType?.service_categories.find(sc => sc.id === rate.category_id)
+    const tour = rate.tour_id ? tours.find(t => t.id === rate.tour_id) : (contract?.tour_id ? tours.find(t => t.id === contract.tour_id) : null)
+    
+    const newRate: ServiceRate = {
+      ...rate,
+      id: Math.max(...serviceRates.map(sr => sr.id), 0) + 1,
+      contractName: contract?.contract_name || '',
+      inventoryTypeName: inventoryType?.name || '',
+      categoryName: category?.category_name || '',
+      tourName: tour?.name || undefined,
+      selling_price: rate.base_rate * (1 + rate.markup_percentage)
+    }
+    setServiceRates([...serviceRates, newRate])
+  }
+
+  const updateServiceRate = (id: number, rate: Partial<ServiceRate>) => {
+    setServiceRates(serviceRates.map(sr => {
+      if (sr.id === id) {
+        const updated = { ...sr, ...rate }
+        // Recalculate selling price if base_rate or markup changed
+        if (rate.base_rate !== undefined || rate.markup_percentage !== undefined) {
+          updated.selling_price = (updated.base_rate || sr.base_rate) * (1 + (updated.markup_percentage ?? sr.markup_percentage))
+        }
+        // Update names if IDs changed
+        if (rate.contract_id !== undefined) {
+          const contract = rate.contract_id ? serviceContracts.find(sc => sc.id === rate.contract_id) : null
+          updated.contractName = contract?.contract_name || ''
+          // Inherit tour from contract if not manually set
+          if (!rate.tour_id && contract?.tour_id) {
+            const tour = tours.find(t => t.id === contract.tour_id)
+            updated.tour_id = contract.tour_id
+            updated.tourName = tour?.name || undefined
+          }
+        }
+        if (rate.inventory_type_id) {
+          const inventoryType = serviceInventoryTypes.find(sit => sit.id === rate.inventory_type_id)
+          updated.inventoryTypeName = inventoryType?.name || updated.inventoryTypeName
+        }
+        if (rate.category_id) {
+          const inventoryType = serviceInventoryTypes.find(sit => sit.id === updated.inventory_type_id || sr.inventory_type_id)
+          const category = inventoryType?.service_categories.find(sc => sc.id === rate.category_id)
+          updated.categoryName = category?.category_name || updated.categoryName
+        }
+        if (rate.tour_id !== undefined) {
+          const tour = rate.tour_id ? tours.find(t => t.id === rate.tour_id) : null
+          updated.tourName = tour?.name || undefined
+        }
+        return updated
+      }
+      return sr
+    }))
+  }
+
+  const deleteServiceRate = (id: number) => {
+    setServiceRates(serviceRates.filter(sr => sr.id !== id))
+  }
+
   // Contract CRUD
-  const addContract = (contract: Omit<Contract, 'id' | 'hotelName'>) => {
+  const addContract = (contract: Omit<Contract, 'id' | 'hotelName' | 'supplierName'>) => {
     const hotel = hotels.find(h => h.id === contract.hotel_id)
+    const supplier = suppliers.find(s => s.id === contract.supplier_id)
     const newContract = { 
       ...contract, 
       id: Math.max(...contracts.map(c => c.id), 0) + 1,
-      hotelName: hotel?.name || ''
+      hotelName: hotel?.name || '',
+      supplierName: supplier?.name || ''
     }
   console.log('addContract - Saving contract with tour_ids:', newContract.tour_ids)
     setContracts([...contracts, newContract])
@@ -975,6 +2320,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
               markup_percentage: contract.markup_percentage || 0.60,
               shoulder_markup_percentage: contract.shoulder_markup_percentage || 0.30,
               currency: contract.currency,
+              active: true, // Default to active
             }
           newRates.push(newRate)
         })
@@ -1015,6 +2361,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       // Inherit from contract if not specified
       currency: rate.currency || contract?.currency,
       tax_rate: rate.tax_rate !== undefined ? rate.tax_rate : contract?.tax_rate,
+      active: rate.active !== undefined ? rate.active : true, // Default to active
     }
     setRates([...rates, newRate as Rate])
   }
@@ -1239,7 +2586,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // Record purchase details for buy-to-order bookings
   const recordPurchaseDetails = (
     bookingId: number, 
-    _purchaseDetails: {
+    purchaseDetails: {
       assigned_to: string
       hotel_contact: string
       hotel_confirmation: string
@@ -1250,14 +2597,35 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const booking = bookings.find(b => b.id === bookingId)
     if (!booking) return
 
-    // TODO: Update for new room-based structure to use _purchaseDetails
+    // Update all buy-to-order rooms with purchase details
+    const updatedBooking = {
+      ...booking,
+      status: 'confirmed' as const,
+      rooms: booking.rooms?.map(room => {
+        if (room.purchase_type === 'buy_to_order' && room.purchase_status === 'pending_purchase') {
+          return {
+            ...room,
+            purchase_status: 'purchased' as const,
+            purchase_order: {
+              assigned_to: purchaseDetails.assigned_to,
+              hotel_contact: purchaseDetails.hotel_contact,
+              purchase_date: new Date().toISOString().split('T')[0],
+              hotel_confirmation: purchaseDetails.hotel_confirmation,
+              cost_per_room: purchaseDetails.cost_per_room,
+              total_cost: purchaseDetails.cost_per_room * room.quantity,
+              notes: purchaseDetails.notes,
+            }
+          }
+        }
+        return room
+      }) || []
+    }
+
     setBookings(bookings.map(b => 
-      b.id === bookingId 
-        ? { ...b, status: 'confirmed' as const }
-        : b
+      b.id === bookingId ? updatedBooking : b
     ))
 
-    console.log(`PURCHASE RECORDED for booking ${bookingId}`)
+    console.log(`✅ PURCHASE RECORDED for booking ${bookingId}`, purchaseDetails)
   }
 
   const cancelBooking = (id: number) => {
@@ -1496,11 +2864,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
     tours,
     tourComponents,
     hotels,
+    suppliers,
     contracts,
     rates,
     stocks,
     listings,
     bookings,
+    payments,
+    serviceRequests,
+    serviceInventoryTypes,
+    serviceContracts,
+    serviceRates,
     recentActivity: initialData.recentActivity,
     hotelLocations: initialData.hotelLocations,
     addTour,
@@ -1512,6 +2886,25 @@ export function DataProvider({ children }: { children: ReactNode }) {
     addHotel,
     updateHotel,
     deleteHotel,
+    addSupplier,
+    updateSupplier,
+    deleteSupplier,
+    addPayment,
+    updatePayment,
+    deletePayment,
+    recordPayment,
+    addServiceRequest,
+    updateServiceRequest,
+    deleteServiceRequest,
+    addServiceInventoryType,
+    updateServiceInventoryType,
+    deleteServiceInventoryType,
+    addServiceContract,
+    updateServiceContract,
+    deleteServiceContract,
+    addServiceRate,
+    updateServiceRate,
+    deleteServiceRate,
     addContract,
     updateContract,
     deleteContract,

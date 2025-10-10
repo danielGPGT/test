@@ -13,8 +13,8 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { useData, OccupancyType, Rate, Contract, BookingRoom } from '@/contexts/data-context'
-import { ShoppingCart, Trash2, Building2, DoorOpen, TrendingUp, DollarSign, Percent, Package, Check, Calendar, User } from 'lucide-react'
+import { useData, OccupancyType, Rate, Contract, BookingRoom, ServiceRate } from '@/contexts/data-context'
+import { ShoppingCart, Trash2, Building2, DoorOpen, Package, Calendar, User, Check, Car, Ticket, Utensils, Palmtree } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import {
   Accordion,
@@ -28,17 +28,28 @@ import { toast } from 'sonner'
 
 // Cart item structure
 interface CartItem {
+  type: 'hotel'
   rate: Rate
   contract: Contract
   quantity: number
+  guests_count: number
   occupancy_type: OccupancyType
   nights: number
   pricePerRoom: number
   totalPrice: number
 }
 
-// Compact Room Rate Card
-function CompactRoomCard({ 
+// Service cart item structure
+interface ServiceCartItem {
+  type: 'service'
+  serviceRate: ServiceRate
+  quantity: number
+  totalPrice: number
+  date?: string // For dated services
+}
+
+// Table Row for Room Rate
+function RoomRateRow({ 
   roomGroup, 
   nights, 
   onAddToCart 
@@ -52,39 +63,48 @@ function CompactRoomCard({
     maxMargin: number
   }
   nights: number
-  onAddToCart: (rateItem: any, quantity: number, occupancy: OccupancyType) => void
+  onAddToCart: (rateItem: any, quantity: number, occupancy: OccupancyType, guestsCount: number) => void
 }) {
   const availableOccupancies = useMemo(() => {
-    // Get room capacity from the hotel's room group data
-    const roomGroupId = roomGroup.rates[0]?.rate.room_group_id
-    const hotel = roomGroup.rates[0]?.hotel
+    // Only show occupancies that have at least one ACTIVE rate in this room group
+    const occupanciesWithRates = new Set<OccupancyType>()
     
-    let roomCapacity = 2 // Default fallback
+    roomGroup.rates.forEach(rateItem => {
+      // roomGroup.rates already contains only active rates (filtered in availableRates)
+      occupanciesWithRates.add(rateItem.rate.occupancy_type)
+    })
     
-    if (hotel && roomGroupId) {
-      const roomGroupData = hotel.room_groups?.find((rg: any) => rg.id === roomGroupId)
-      roomCapacity = roomGroupData?.capacity || 2
-    }
+    // Return in standard order
+    const orderedOccupancies: OccupancyType[] = []
+    if (occupanciesWithRates.has('single')) orderedOccupancies.push('single')
+    if (occupanciesWithRates.has('double')) orderedOccupancies.push('double')
+    if (occupanciesWithRates.has('triple')) orderedOccupancies.push('triple')
+    if (occupanciesWithRates.has('quad')) orderedOccupancies.push('quad')
     
-    // Generate all occupancies up to room capacity
-    const allOccupancies: OccupancyType[] = []
-    if (roomCapacity >= 1) allOccupancies.push('single')
-    if (roomCapacity >= 2) allOccupancies.push('double')
-    if (roomCapacity >= 3) allOccupancies.push('triple')
-    if (roomCapacity >= 4) allOccupancies.push('quad')
-    
-    return allOccupancies
+    return orderedOccupancies
   }, [roomGroup.rates])
   
   const [selectedQty, setSelectedQty] = useState(1)
   const [selectedOcc, setSelectedOcc] = useState<OccupancyType>(availableOccupancies[0] || 'double')
   const [selectedRateId, setSelectedRateId] = useState<number | undefined>(undefined)
-  const [sortBy, setSortBy] = useState<'margin' | 'price'>('margin')
+  const [guestsCount, setGuestsCount] = useState(2)
+  
+  // Auto-select first available occupancy if current one is not available
+  useEffect(() => {
+    if (availableOccupancies.length > 0 && !availableOccupancies.includes(selectedOcc)) {
+      setSelectedOcc(availableOccupancies[0])
+    }
+  }, [availableOccupancies, selectedOcc])
   
   const contractOptions = useMemo(() => {
-    // Get all unique contracts from room group rates
+    // Only process rates that match the selected occupancy
+    const ratesForSelectedOcc = roomGroup.rates.filter(rateItem => 
+      rateItem.rate.occupancy_type === selectedOcc
+    )
+    
+    // Get all unique contracts from filtered rates
     const uniqueContracts = new Map<number, typeof roomGroup.rates[0]>()
-    roomGroup.rates.forEach(rateItem => {
+    ratesForSelectedOcc.forEach(rateItem => {
       const contractId = rateItem.contract?.id || 0
       if (!uniqueContracts.has(contractId)) {
         uniqueContracts.set(contractId, rateItem)
@@ -153,14 +173,8 @@ function CompactRoomCard({
           isBuyToOrder: (rateItem as any).isBuyToOrder || false
         }
       })
-      .sort((a, b) => {
-        if (sortBy === 'price') {
-          return a.costPerRoom - b.costPerRoom // Best price first
-        } else {
-          return b.marginPerRoom - a.marginPerRoom // Highest margin first
-        }
-      })
-  }, [roomGroup.rates, nights, selectedOcc, sortBy])
+      .sort((a, b) => b.marginPerRoom - a.marginPerRoom) // Sort by best margin (highest first)
+  }, [roomGroup.rates, nights, selectedOcc])
   
   useEffect(() => {
     if (contractOptions.length > 0) {
@@ -172,16 +186,6 @@ function CompactRoomCard({
   }, [contractOptions, selectedRateId])
   
   const selectedRateItem = contractOptions.find(r => r.rate.id === selectedRateId) || contractOptions[0]
-  
-  // Count unique sources (contracts + buy-to-order)
-  const uniqueSources = useMemo(() => {
-    const contractIds = new Set()
-    roomGroup.rates.forEach(r => {
-      const id = r.contract?.id || ((r as any).isBuyToOrder ? 'bto' : 'unknown')
-      contractIds.add(id)
-    })
-    return contractIds.size
-  }, [roomGroup.rates])
   
   const selectedPrice = useMemo(() => {
     if (!selectedRateItem) return { cost: 0, sell: 0, margin: 0 }
@@ -235,216 +239,174 @@ function CompactRoomCard({
     }
   }, [selectedRateItem, selectedQty, selectedOcc, nights])
   
+  // Disable if no occupancies available
+  if (availableOccupancies.length === 0) {
+    return (
+      <tr className="border-b">
+        <td className="p-3 text-sm">{roomGroup.roomName}</td>
+        <td colSpan={6} className="p-3 text-center text-xs text-muted-foreground italic">
+          No active rates available
+        </td>
+      </tr>
+    )
+  }
+  
   return (
-    <div className="border rounded-lg">
-      <div className="p-3 bg-muted/30">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2">
-              <DoorOpen className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-              <span className="font-medium text-sm">{roomGroup.roomName}</span>
-            </div>
-            <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-              <span className="flex items-center gap-1">
-                <Package className="h-3 w-3" />
-                <span className="font-medium">
-                  {roomGroup.rates.some(r => (r as any).isBuyToOrder) ? 'On request' : roomGroup.totalAvailable}
-                </span>
-                {!roomGroup.rates.some(r => (r as any).isBuyToOrder) && ' available'}
-              </span>
-              <Separator orientation="vertical" className="h-3" />
-              <span>
-                <span className="font-medium">{uniqueSources}</span> source{uniqueSources > 1 ? 's' : ''}
-              </span>
-            </div>
-          </div>
-          <div className="text-right text-xs">
-            <div className="font-medium text-sm">{formatCurrency(roomGroup.minPrice)}</div>
-            <div className="text-muted-foreground">from</div>
-          </div>
+    <tr className="border-b hover:bg-muted/30 transition-colors">
+      {/* Room Name */}
+      <td className="p-3">
+        <div className="flex items-center gap-2">
+          <DoorOpen className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+          <span className="font-medium text-sm">{roomGroup.roomName}</span>
         </div>
-      </div>
-
-      <Accordion type="single" collapsible className="border-0">
-        <AccordionItem value="contracts" className="border-0">
-          <AccordionTrigger className="px-3 py-2 text-xs hover:no-underline">
-            <div className="flex items-center justify-between w-full pr-2">
-              <span className="flex items-center gap-2">
-                <TrendingUp className="h-3 w-3" />
-                Select Contract ({contractOptions.length} for {selectedOcc})
-              </span>
-              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
-                <Button
-                  variant={sortBy === 'margin' ? 'default' : 'ghost'}
-                  size="sm"
-                  className="h-5 text-[9px] px-1.5"
-                  onClick={() => setSortBy('margin')}
-                >
-                  Margin
-                </Button>
-                <Button
-                  variant={sortBy === 'price' ? 'default' : 'ghost'}
-                  size="sm"
-                  className="h-5 text-[9px] px-1.5"
-                  onClick={() => setSortBy('price')}
-                >
-                  Price
-                </Button>
-              </div>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="px-3 pb-3">
-            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
-              {contractOptions.length === 0 && (
-                <p className="text-xs text-muted-foreground text-center py-2">
-                  No contracts available for {selectedOcc} occupancy
-                </p>
-              )}
+      </td>
+      
+      {/* Occupancy Selector */}
+      <td className="p-3">
+        <Select value={selectedOcc} onValueChange={(v) => setSelectedOcc(v as OccupancyType)}>
+          <SelectTrigger className="h-8 text-xs w-24">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {availableOccupancies.map(occ => (
+              <SelectItem key={occ} value={occ} className="text-xs capitalize">
+                {occ === 'single' && '1p'}
+                {occ === 'double' && '2p'}
+                {occ === 'triple' && '3p'}
+                {occ === 'quad' && '4p'}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </td>
+      
+      {/* Contract Selector */}
+      <td className="p-3">
+        {contractOptions.length === 0 ? (
+          <span className="text-xs text-muted-foreground italic">No rates</span>
+        ) : (
+          <Select 
+            value={selectedRateId?.toString() || contractOptions[0]?.rate.id.toString()} 
+            onValueChange={(v) => setSelectedRateId(parseInt(v))}
+          >
+            <SelectTrigger className="h-8 text-xs">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
               {contractOptions.map((option, idx) => {
-                const isSelected = selectedRateId === option.rate.id
                 const isBest = idx === 0
-                const bestLabel = sortBy === 'price' ? 'Best Price' : 'Best Margin'
                 
                 return (
-                  <button
-                    key={option.rate.id}
-                    onClick={() => setSelectedRateId(option.rate.id)}
-                    className={`w-full text-left p-2 rounded border transition-colors ${
-                      isSelected
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border hover:border-primary/30 hover:bg-accent/30'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-xs font-medium truncate">{option.contract.contract_name}</span>
-                          {isBest && <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4">{bestLabel}</Badge>}
-                          {option.isBuyToOrder && (
-                            <Badge variant="outline" className="text-[10px] px-1 py-0 h-4 border-orange-500 text-orange-600">
-                              Buy-to-Order
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
-                          <span className="flex items-center gap-0.5">
-                            <DollarSign className="h-3 w-3" />
-                            {formatCurrency(option.costPerRoom)}
-                          </span>
-                          <Separator orientation="vertical" className="h-3" />
-                          <span className="flex items-center gap-0.5 text-green-600">
-                            <Percent className="h-3 w-3" />
-                            {option.marginPercent.toFixed(0)}%
-                          </span>
-                          <Separator orientation="vertical" className="h-3" />
-                          <span>
-                            {option.isBuyToOrder ? 'On request' : `${option.available} avail`}
-                          </span>
-                        </div>
-                      </div>
-                      {isSelected && <Check className="h-3.5 w-3.5 text-primary flex-shrink-0" />}
-                    </div>
-                  </button>
+                  <SelectItem key={option.rate.id} value={option.rate.id.toString()} className="text-xs">
+                    {isBest && '⭐ '} {option.contract.contract_name}
+                    {option.isBuyToOrder && ' 🟠'}
+                  </SelectItem>
                 )
               })}
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-
-      <div className="p-3 space-y-2 border-t">
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <Label className="text-[11px] text-muted-foreground">Occupancy</Label>
-            <Select value={selectedOcc} onValueChange={(v) => setSelectedOcc(v as OccupancyType)}>
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {availableOccupancies.map(occ => (
-                  <SelectItem key={occ} value={occ} className="text-xs capitalize">
-                    {occ} {occ === 'single' && '(1p)'}
-                    {occ === 'double' && '(2p)'}
-                    {occ === 'triple' && '(3p)'}
-                    {occ === 'quad' && '(4p)'}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <Label className="text-[11px] text-muted-foreground">Quantity</Label>
-            <Input 
-              type="number" 
-              min={1}
-              max={selectedRateItem?.isBuyToOrder ? undefined : selectedRateItem?.available || 1}
-              value={selectedQty}
-              onChange={(e) => {
-                const newQty = Math.max(1, parseInt(e.target.value) || 1)
-                if (selectedRateItem?.isBuyToOrder) {
-                  setSelectedQty(newQty)
-                } else {
-                  setSelectedQty(Math.min(selectedRateItem?.available || 1, newQty))
-                }
-              }}
-              className="h-8 text-xs"
-              placeholder={selectedRateItem?.isBuyToOrder ? "Quantity" : undefined}
-            />
-          </div>
+            </SelectContent>
+          </Select>
+        )}
+      </td>
+      
+      {/* Availability */}
+      <td className="p-3 text-xs text-center">
+        {selectedRateItem?.isBuyToOrder ? (
+          <Badge variant="outline" className="text-[10px] border-orange-500 text-orange-600">On request</Badge>
+        ) : (
+          <span className="font-medium">{selectedRateItem?.available || 0}</span>
+        )}
+      </td>
+      
+      {/* Price */}
+      <td className="p-3 text-right">
+        <div className="text-sm font-bold">{formatCurrency(selectedPrice.sell / selectedQty)}</div>
+        <div className="text-[10px] text-muted-foreground">
+          +{formatCurrency(selectedPrice.margin / selectedQty)} margin
         </div>
-        
-        <div className="flex items-center justify-between p-2 bg-muted/50 rounded text-xs">
-          <div>
-            <div className="text-muted-foreground">{selectedQty}× {nights}n ({selectedOcc})</div>
-            <div className="font-medium text-green-600">+{formatCurrency(selectedPrice.margin)} margin</div>
-            {selectedRateItem && (
-              <div className="text-[10px] text-muted-foreground truncate max-w-[120px]">
-                {selectedRateItem.contract.contract_name}
-              </div>
-            )}
-          </div>
-          <div className="text-right">
-            <div className="text-lg font-bold">{formatCurrency(selectedPrice.sell)}</div>
-            <div className="text-muted-foreground text-[10px]">cost: {formatCurrency(selectedPrice.cost)}</div>
-          </div>
-        </div>
-        
-        <Button 
-          onClick={() => {
-            if (selectedRateItem) {
-              onAddToCart(selectedRateItem, selectedQty, selectedOcc)
+      </td>
+      
+      {/* Quantity */}
+      <td className="p-3">
+        <Input 
+          type="number" 
+          min={1}
+          max={selectedRateItem?.isBuyToOrder ? undefined : selectedRateItem?.available || 1}
+          value={selectedQty}
+          onChange={(e) => {
+            const newQty = Math.max(1, parseInt(e.target.value) || 1)
+            if (selectedRateItem?.isBuyToOrder) {
+              setSelectedQty(newQty)
+            } else {
+              setSelectedQty(Math.min(selectedRateItem?.available || 1, newQty))
             }
           }}
-          size="sm"
-          className="w-full h-8 text-xs"
-          disabled={!selectedRateItem || contractOptions.length === 0}
-        >
-          <ShoppingCart className="h-3 w-3 mr-1.5" />
-          Add to Cart
-        </Button>
-      </div>
-    </div>
+          className="h-8 text-xs w-16"
+        />
+      </td>
+      
+      {/* Guests */}
+      <td className="p-3">
+        <Input 
+          type="number" 
+          min={1}
+          max={10}
+          value={guestsCount}
+          onChange={(e) => setGuestsCount(Math.max(1, parseInt(e.target.value) || 1))}
+          className="h-8 text-xs w-16"
+          placeholder="Guests"
+        />
+      </td>
+      
+      {/* Total & Action */}
+      <td className="p-3">
+        <div className="flex items-center gap-2">
+          <div className="text-right">
+            <div className="text-sm font-bold">{formatCurrency(selectedPrice.sell)}</div>
+            <div className="text-[10px] text-muted-foreground">total</div>
+          </div>
+          <Button 
+            onClick={() => {
+              if (selectedRateItem) {
+                onAddToCart(selectedRateItem, selectedQty, selectedOcc, guestsCount)
+              }
+            }}
+            size="sm"
+            className="h-8 text-xs whitespace-nowrap"
+            disabled={!selectedRateItem || contractOptions.length === 0}
+          >
+            <ShoppingCart className="h-3 w-3 mr-1" />
+            Add
+          </Button>
+        </div>
+      </td>
+    </tr>
   )
 }
 
 export function BookingsCreate() {
   const navigate = useNavigate()
-  const { bookings, tours, rates, contracts, hotels, addBooking, tourComponents } = useData()
+  const { bookings, tours, rates, contracts, hotels, addBooking, tourComponents, serviceRates, serviceInventoryTypes } = useData()
   
   // Booking state
   const [selectedTourId, setSelectedTourId] = useState(0)
   const [checkInDate, setCheckInDate] = useState('')
   const [checkOutDate, setCheckOutDate] = useState('')
   const [cart, setCart] = useState<CartItem[]>([])
+  const [serviceCart, setServiceCart] = useState<ServiceCartItem[]>([])
   
   // Customer details
   const [customerName, setCustomerName] = useState('')
   const [customerEmail, setCustomerEmail] = useState('')
+  const [customerPhone, setCustomerPhone] = useState('')
   
   // Filters
   const [filterOccupancy, setFilterOccupancy] = useState<OccupancyType | 'all'>('all')
   const [filterBoardType, setFilterBoardType] = useState<string>('all')
   const [filterRoomType, setFilterRoomType] = useState<string>('all')
+  const [filterServiceCategory, setFilterServiceCategory] = useState<string>('all')
+  
+  // View toggle
+  const [activeTab, setActiveTab] = useState<'hotels' | 'services'>('hotels')
 
   const selectedTour = useMemo(() => 
     tours.find(t => t.id === selectedTourId),
@@ -486,8 +448,8 @@ export function BookingsCreate() {
             return marginB - marginA
           })[0]
           
-          // Add to cart
-          addToCart(bestRate, 1, 'double')
+          // Add to cart with default guest count of 2
+          addToCart(bestRate, 1, 'double', 2)
         }
       })
     }
@@ -508,6 +470,7 @@ export function BookingsCreate() {
     
     // STEP 1: Get inventory rates (contract-based with allocations)
     const inventoryRates = rates
+      .filter(rate => rate.active !== false) // Only show active rates
       .map(rate => {
         const contract = contracts.find(c => c.id === rate.contract_id)
         if (!contract) return null
@@ -594,7 +557,7 @@ export function BookingsCreate() {
     
     // STEP 3: Add buy-to-order rates ONLY for room types without inventory
     const buyToOrderRates = rates
-      .filter(rate => rate.hotel_id && !rate.contract_id) // Buy-to-order rates
+      .filter(rate => rate.hotel_id && !rate.contract_id && rate.active !== false) // Buy-to-order rates (active only)
       .map(rate => {
         const hotel = hotels.find(h => h.id === rate.hotel_id)
         if (!hotel) return null
@@ -773,7 +736,7 @@ export function BookingsCreate() {
     return Array.from(typesMap.entries()).map(([id, name]) => ({ id, name }))
   }, [availableRates])
 
-  const addToCart = (rateItem: NonNullable<typeof availableRates[0]>, quantity: number, occupancyType: OccupancyType) => {
+  const addToCart = (rateItem: NonNullable<typeof availableRates[0]>, quantity: number, occupancyType: OccupancyType, guestsCount: number) => {
     const { rate } = rateItem
     
     // For buy-to-order rates, create mock contract
@@ -826,9 +789,11 @@ export function BookingsCreate() {
     const totalPrice = pricePerRoom * quantity
     
     const cartItem: CartItem = {
+      type: 'hotel',
       rate,
       contract: effectiveContract,
       quantity,
+      guests_count: guestsCount,
       occupancy_type: occupancyType,
       nights,
       pricePerRoom,
@@ -864,31 +829,139 @@ export function BookingsCreate() {
     setCart(newCart)
   }
 
+  // Available Service Rates
+  const availableServiceRates = useMemo(() => {
+    if (!selectedTourId || !selectedTour) return []
+    
+    const tourStart = new Date(selectedTour.start_date)
+    const tourEnd = new Date(selectedTour.end_date)
+    
+    return serviceRates
+      .filter(rate => {
+        // Only active rates
+        if (rate.active !== true) return false
+        
+        // Check if service dates overlap with tour dates
+        const rateStart = new Date(rate.valid_from)
+        const rateEnd = new Date(rate.valid_to)
+        
+        // Service must overlap with tour dates (not necessarily start on check-in)
+        const hasOverlap = rateStart <= tourEnd && rateEnd >= tourStart
+        if (!hasOverlap) return false
+        
+        // Tour filtering logic:
+        // Show services that are EITHER:
+        // 1. Linked to the selected tour (tour_id === selectedTourId)
+        // 2. Generic services (tour_id is null/undefined) - available for all tours
+        // Exclude services linked to OTHER tours
+        if (rate.tour_id) {
+          // If rate has a tour_id, it must match the selected tour
+          if (rate.tour_id !== selectedTourId) return false
+        }
+        // If rate.tour_id is undefined/null, it's generic and always included
+        
+        // Filter by category
+        if (filterServiceCategory !== 'all') {
+          const inventoryType = serviceInventoryTypes.find(t => t.id === rate.inventory_type_id)
+          if (inventoryType?.category !== filterServiceCategory) return false
+        }
+        
+        return true
+      })
+  }, [selectedTour, selectedTourId, serviceRates, serviceInventoryTypes, filterServiceCategory])
+
+  const addServiceToCart = (serviceRate: ServiceRate, quantity: number, date?: string) => {
+    const totalPrice = serviceRate.selling_price * quantity
+    
+    const cartItem: ServiceCartItem = {
+      type: 'service',
+      serviceRate,
+      quantity,
+      totalPrice,
+      date
+    }
+    
+    setServiceCart([...serviceCart, cartItem])
+    
+    // Smart pairing suggestion for transfers
+    if ((serviceRate.direction === 'inbound' || serviceRate.direction === 'outbound') && serviceRate.paired_rate_id) {
+      const pairedRate = serviceRates.find(r => r.id === serviceRate.paired_rate_id)
+      if (pairedRate && !serviceCart.some(item => item.serviceRate.id === pairedRate.id)) {
+        const directionLabel = serviceRate.direction === 'inbound' ? 'departure' : 'arrival'
+        toast.success(`Added ${quantity}× ${serviceRate.categoryName} to cart`, {
+          description: `💡 Don't forget to add the ${directionLabel} transfer!`,
+          action: {
+            label: 'Add Return',
+            onClick: () => addServiceToCart(pairedRate, quantity, date)
+          }
+        })
+        return
+      }
+    }
+    
+    toast.success(`Added ${quantity}× ${serviceRate.categoryName} to cart`)
+  }
+
+  const removeServiceFromCart = (index: number) => {
+    setServiceCart(serviceCart.filter((_, i) => i !== index))
+    toast.info('Service removed from cart')
+  }
+
   const cartTotal = useMemo(() => {
-    return cart.reduce((sum, item) => sum + item.totalPrice, 0)
-  }, [cart])
+    const hotelTotal = cart.reduce((sum, item) => sum + item.totalPrice, 0)
+    const serviceTotal = serviceCart.reduce((sum, item) => sum + item.totalPrice, 0)
+    return hotelTotal + serviceTotal
+  }, [cart, serviceCart])
 
   const cartRoomCount = useMemo(() => {
     return cart.reduce((sum, item) => sum + item.quantity, 0)
   }, [cart])
+  
+  const cartServiceCount = useMemo(() => {
+    return serviceCart.reduce((sum, item) => sum + item.quantity, 0)
+  }, [serviceCart])
 
   const handleCreateBooking = () => {
     if (!selectedTour) {
       toast.error('Please select a tour')
       return
     }
-    if (cart.length === 0) {
-      toast.error('Cart is empty')
+    if (cart.length === 0 && serviceCart.length === 0) {
+      toast.error('Cart is empty - add hotels or services')
       return
     }
-    if (!customerName || !customerEmail) {
-      toast.error('Please enter customer details')
+    if (!customerName || !customerEmail || !customerPhone) {
+      toast.error('Please enter customer details (name, email, and phone)')
       return
     }
     
     const rooms: BookingRoom[] = cart.map(item => {
       const hotel = hotels.find(h => h.id === (item.rate.hotel_id || item.contract.hotel_id))
       const isBuyToOrder = !item.contract.id || item.contract.contract_name === 'Buy-to-Order'
+      
+      // Recalculate the estimated cost for this room (for variance tracking)
+      const boardCost = item.rate.board_cost !== undefined ? item.rate.board_cost : 
+        item.contract.board_options?.find((o: any) => o.board_type === item.rate.board_type)?.additional_cost || 0
+      
+      let baseRate = item.rate.rate
+      if (item.contract.pricing_strategy === 'per_occupancy' && item.contract.occupancy_rates) {
+        const occupancyRate = item.contract.occupancy_rates.find((or: any) => or.occupancy_type === item.occupancy_type)
+        if (occupancyRate) {
+          baseRate = occupancyRate.rate
+        }
+      } else if (item.contract.pricing_strategy === 'flat_rate') {
+        baseRate = item.contract.base_rate
+      }
+      
+      const breakdown = calculatePriceBreakdown(
+        baseRate,
+        item.contract,
+        item.occupancy_type,
+        nights,
+        boardCost
+      )
+      
+      const estimatedCostPerRoom = breakdown.totalCost
       
       return {
         listing_id: 0,
@@ -900,8 +973,10 @@ export function BookingsCreate() {
         board_type: item.rate.board_type,
         purchase_type: isBuyToOrder ? 'buy_to_order' : 'inventory',
         quantity: item.quantity,
+        guests_count: item.guests_count,
         price_per_room: item.pricePerRoom,
         total_price: item.totalPrice,
+        estimated_cost_per_room: estimatedCostPerRoom,
         purchase_status: isBuyToOrder ? 'pending_purchase' : 'not_required'
       }
     })
@@ -910,6 +985,7 @@ export function BookingsCreate() {
       tour_id: selectedTourId,
       customer_name: customerName,
       customer_email: customerEmail,
+      customer_phone: customerPhone,
       check_in_date: checkInDate,
       check_out_date: checkOutDate,
       nights,
@@ -921,13 +997,13 @@ export function BookingsCreate() {
     navigate('/bookings')
   }
 
-  const canCreateBooking = selectedTour && cart.length > 0 && customerName && customerEmail
+  const canCreateBooking = selectedTour && (cart.length > 0 || serviceCart.length > 0) && customerName && customerEmail && customerPhone
 
   return (
     <div className="min-h-screen pt-0 bg-background">
 
 
-      <div className="container mx-auto px-4 py-6">
+      <div className="mx-auto px-4 py-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Content - Left Side */}
           <div className="lg:col-span-2 space-y-4">
@@ -1065,8 +1141,38 @@ export function BookingsCreate() {
               </Card>
             )}
 
-            {/* Available Rooms */}
+            {/* Tab Navigation */}
             {nights > 0 && (
+              <>
+                <div className="flex gap-2 border-b mb-4">
+                  <button
+                    onClick={() => setActiveTab('hotels')}
+                    className={`px-4 py-2 font-medium transition-colors ${
+                      activeTab === 'hotels'
+                        ? 'border-b-2 border-primary text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Building2 className="inline h-4 w-4 mr-2" />
+                    Hotels
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('services')}
+                    className={`px-4 py-2 font-medium transition-colors ${
+                      activeTab === 'services'
+                        ? 'border-b-2 border-primary text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    <Package className="inline h-4 w-4 mr-2" />
+                    Services ({availableServiceRates.length})
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* Available Rooms */}
+            {nights > 0 && activeTab === 'hotels' && (
               <div className="space-y-2">
                 {groupedByHotel.length === 0 && (
                   <Card>
@@ -1090,31 +1196,251 @@ export function BookingsCreate() {
                           <div className="flex items-center gap-2">
                             <Building2 className="h-4 w-4 text-primary" />
                             <span className="font-semibold text-sm">{hotel.hotelName}</span>
-                          </div>
-                          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                            <span>{hotel.roomGroups.length} room type{hotel.roomGroups.length > 1 ? 's' : ''}</span>
                             <Badge variant="outline" className="text-xs">
+                              {hotel.roomGroups.length} room{hotel.roomGroups.length > 1 ? 's' : ''}
+                            </Badge>
+                          </div>
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="text-xs">
                               {hotel.roomGroups.some(rg => rg.rates.some(r => (r as any).isBuyToOrder)) 
                                 ? 'On request' 
-                                : `${Array.from(hotel.allocationMap.values()).reduce((sum, avail) => sum + avail, 0)} total`
+                                : `${Array.from(hotel.allocationMap.values()).reduce((sum, avail) => sum + avail, 0)} available`
                               }
-                            </Badge>
+                            </span>
                           </div>
                         </div>
                       </AccordionTrigger>
-                      <AccordionContent className="p-3 bg-card pt-2 space-y-2">
-                        {hotel.roomGroups.map((roomGroup, idx) => (
-                          <CompactRoomCard
-                            key={idx}
-                            roomGroup={roomGroup}
-                            nights={nights}
-                            onAddToCart={(rateItem, quantity, occupancy) => addToCart(rateItem, quantity, occupancy)}
-                          />
-                        ))}
+                      <AccordionContent className="p-0 bg-card">
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead className="bg-muted/50 border-b">
+                              <tr>
+                                <th className="p-2 text-left text-xs font-medium text-muted-foreground">Room Type</th>
+                                <th className="p-2 text-left text-xs font-medium text-muted-foreground">Occupancy</th>
+                                <th className="p-2 text-left text-xs font-medium text-muted-foreground">Contract</th>
+                                <th className="p-2 text-center text-xs font-medium text-muted-foreground">Available</th>
+                                <th className="p-2 text-right text-xs font-medium text-muted-foreground">Price/Room</th>
+                                <th className="p-2 text-center text-xs font-medium text-muted-foreground">Quantity</th>
+                                <th className="p-2 text-center text-xs font-medium text-muted-foreground">Guests</th>
+                                <th className="p-2 text-right text-xs font-medium text-muted-foreground">Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {hotel.roomGroups.map((roomGroup, idx) => (
+                                <RoomRateRow
+                                  key={idx}
+                                  roomGroup={roomGroup}
+                                  nights={nights}
+                                  onAddToCart={(rateItem, quantity, occupancy, guestsCount) => addToCart(rateItem, quantity, occupancy, guestsCount)}
+                                />
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
                       </AccordionContent>
                     </AccordionItem>
                   ))}
                 </Accordion>
+              </div>
+            )}
+
+            {/* Services Tab */}
+            {activeTab === 'services' && (
+              <div className="space-y-4">
+                {/* Service Filters */}
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="grid gap-2">
+                      <Label>Service Category</Label>
+                      <Select value={filterServiceCategory} onValueChange={setFilterServiceCategory}>
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All Categories</SelectItem>
+                          <SelectItem value="transfer">Transfers & Transport</SelectItem>
+                          <SelectItem value="ticket">Tickets & Events</SelectItem>
+                          <SelectItem value="activity">Activities & Tours</SelectItem>
+                          <SelectItem value="meal">Meals & Dining</SelectItem>
+                          <SelectItem value="other">Other Services</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Available Services - Grouped by Category */}
+                {availableServiceRates.length === 0 ? (
+                  <Card>
+                    <CardContent className="py-12 text-center text-muted-foreground">
+                      <Package className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                      <p>No services available for this tour</p>
+                      <p className="text-sm mt-2">Check Service Inventory or select a different tour</p>
+                    </CardContent>
+                  </Card>
+                ) : (
+                  <Accordion type="multiple" defaultValue={['transfer', 'ticket', 'activity', 'meal', 'other']} className="space-y-2">
+                    {['transfer', 'ticket', 'activity', 'meal', 'other'].map(category => {
+                      const categoryRates = availableServiceRates.filter(rate => {
+                        const inventoryType = serviceInventoryTypes.find(t => t.id === rate.inventory_type_id)
+                        return inventoryType?.category === category
+                      })
+                      
+                      if (categoryRates.length === 0) return null
+                      
+                      const getCategoryIcon = () => {
+                        switch (category) {
+                          case 'transfer': return Car
+                          case 'ticket': return Ticket
+                          case 'activity': return Palmtree
+                          case 'meal': return Utensils
+                          default: return Package
+                        }
+                      }
+                      const CategoryIcon = getCategoryIcon()
+                      
+                      const categoryLabels: Record<string, string> = {
+                        transfer: 'Transfers & Transport',
+                        ticket: 'Tickets & Events',
+                        activity: 'Activities & Tours',
+                        meal: 'Meals & Dining',
+                        other: 'Other Services'
+                      }
+                      
+                      return (
+                        <AccordionItem
+                          key={category}
+                          value={category}
+                          className="border rounded-lg overflow-hidden"
+                        >
+                          <AccordionTrigger className="px-3 py-2 bg-card hover:bg-muted/70 hover:no-underline">
+                            <div className="flex items-center justify-between w-full pr-2">
+                              <div className="flex items-center gap-2">
+                                <CategoryIcon className="h-4 w-4 text-primary" />
+                                <span className="font-semibold text-sm">{categoryLabels[category]}</span>
+                                <Badge variant="outline" className="text-xs">
+                                  {categoryRates.length} available
+                                </Badge>
+                              </div>
+                            </div>
+                          </AccordionTrigger>
+                          <AccordionContent className="p-0 bg-card">
+                            <div className="p-3 space-y-2">
+                              {categoryRates.map((serviceRate) => {
+                                const inventoryType = serviceInventoryTypes.find(t => t.id === serviceRate.inventory_type_id)
+                                const margin = serviceRate.selling_price - serviceRate.base_rate
+                                const marginPercent = (margin / serviceRate.base_rate) * 100
+                                
+                                // Format date range
+                                const formatDate = (dateStr: string) => {
+                                  const date = new Date(dateStr)
+                                  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                                }
+                                
+                                // Get active days
+                                const getActiveDays = () => {
+                                  if (!serviceRate.days_of_week) return 'All days'
+                                  const days = []
+                                  if (serviceRate.days_of_week.monday) days.push('Mon')
+                                  if (serviceRate.days_of_week.tuesday) days.push('Tue')
+                                  if (serviceRate.days_of_week.wednesday) days.push('Wed')
+                                  if (serviceRate.days_of_week.thursday) days.push('Thu')
+                                  if (serviceRate.days_of_week.friday) days.push('Fri')
+                                  if (serviceRate.days_of_week.saturday) days.push('Sat')
+                                  if (serviceRate.days_of_week.sunday) days.push('Sun')
+                                  return days.length === 7 ? 'All days' : days.join(', ')
+                                }
+                                
+                                return (
+                                  <div key={serviceRate.id} className="border rounded-lg p-3 hover:bg-muted/30 transition-colors">
+                                    <div className="flex items-start justify-between gap-4">
+                                      <div className="flex-1">
+                                        <h3 className="font-semibold text-sm mb-1">{serviceRate.categoryName}</h3>
+                                        <p className="text-xs text-muted-foreground mb-1">
+                                          {inventoryType?.name}
+                                          {serviceRate.direction && (
+                                            <span className="ml-1">
+                                              • <span className="font-medium capitalize">
+                                                {serviceRate.direction === 'inbound' ? '→ Arrival' : 
+                                                 serviceRate.direction === 'outbound' ? '← Departure' :
+                                                 serviceRate.direction === 'round_trip' ? '↔ Round Trip' :
+                                                 serviceRate.direction.replace('_', ' ')}
+                                              </span>
+                                            </span>
+                                          )}
+                                        </p>
+                                        <div className="flex items-center gap-2 text-xs text-muted-foreground mb-2">
+                                          <Calendar className="h-3 w-3" />
+                                          <span>{formatDate(serviceRate.valid_from)} - {formatDate(serviceRate.valid_to)}</span>
+                                          <span>•</span>
+                                          <span className="font-mono font-medium">{getActiveDays()}</span>
+                                        </div>
+                                        <div className="flex gap-1 flex-wrap">
+                                          <Badge variant={serviceRate.inventory_type === 'contract' ? 'default' : 'outline'} className="text-xs">
+                                            {serviceRate.inventory_type === 'contract' ? 'Contract' : 'Buy-to-Order'}
+                                          </Badge>
+                                          <Badge variant="outline" className="text-xs">
+                                            {serviceRate.pricing_unit.replace('_', ' ')}
+                                          </Badge>
+                                          {serviceRate.inventory_type === 'contract' && serviceRate.available_quantity !== undefined && (
+                                            <Badge variant="secondary" className="text-xs">
+                                              {serviceRate.available_quantity} available
+                                            </Badge>
+                                          )}
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="text-right">
+                                        <div className="text-lg font-bold text-primary">
+                                          {formatCurrency(serviceRate.selling_price)}
+                                        </div>
+                                        <div className="text-xs text-muted-foreground">
+                                          Cost: {formatCurrency(serviceRate.base_rate)}
+                                        </div>
+                                        <div className="text-xs text-green-600">
+                                          +{formatCurrency(margin)} ({marginPercent.toFixed(0)}%)
+                                        </div>
+                                        
+                                        {/* Paired Transfer Suggestion */}
+                                        {serviceRate.paired_rate_id && (
+                                          <div className="text-xs text-blue-600 mt-1">
+                                            💡 {serviceRate.direction === 'inbound' ? 'Return available' : 'Outbound available'}
+                                          </div>
+                                        )}
+                                        
+                                        <div className="flex gap-2 items-center justify-end mt-2">
+                                          <Input
+                                            type="number"
+                                            min={1}
+                                            max={serviceRate.inventory_type === 'contract' ? serviceRate.available_quantity : undefined}
+                                            defaultValue={1}
+                                            className="w-16 h-8 text-xs"
+                                            id={`qty-${serviceRate.id}`}
+                                          />
+                                          <Button
+                                            size="sm"
+                                            onClick={() => {
+                                              const qtyInput = document.getElementById(`qty-${serviceRate.id}`) as HTMLInputElement
+                                              const qty = parseInt(qtyInput?.value || '1')
+                                              addServiceToCart(serviceRate, qty, checkInDate)
+                                            }}
+                                          >
+                                            <Check className="h-3 w-3 mr-1" />
+                                            Add
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                )
+                              })}
+                            </div>
+                          </AccordionContent>
+                        </AccordionItem>
+                      )
+                    })}
+                  </Accordion>
+                )}
               </div>
             )}
           </div>
@@ -1126,20 +1452,21 @@ export function BookingsCreate() {
                 <CardHeader>
                   <CardTitle className="text-lg flex items-center gap-2">
                     <ShoppingCart className="h-5 w-5" />
-                    Cart ({cart.length})
+                    Cart ({cart.length + serviceCart.length})
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
                   {/* Cart Items */}
-                  {cart.length === 0 ? (
+                  {cart.length === 0 && serviceCart.length === 0 ? (
                     <div className="text-center py-8 text-muted-foreground">
                       <ShoppingCart className="h-12 w-12 mx-auto mb-3 opacity-20" />
                       <p className="text-sm">Your cart is empty</p>
-                      <p className="text-xs mt-1">Add rooms to get started</p>
+                      <p className="text-xs mt-1">Add hotels or services</p>
                     </div>
                   ) : (
                     <>
                       <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        {/* Hotel Items */}
                         {cart.map((item, index) => {
                           const hotel = hotels.find(h => h.id === item.contract.hotel_id || item.rate.hotel_id)
                           const isBuyToOrder = !item.contract.id || item.contract.contract_name === 'Buy-to-Order'
@@ -1192,16 +1519,73 @@ export function BookingsCreate() {
                       
                       <Separator />
                       
+                      {/* Service Items */}
+                      {serviceCart.map((item, index) => {
+                        const inventoryType = serviceInventoryTypes.find(t => t.id === item.serviceRate.inventory_type_id)
+                        const getDirectionIcon = () => {
+                          if (item.serviceRate.direction === 'inbound') return '→'
+                          if (item.serviceRate.direction === 'outbound') return '←'
+                          if (item.serviceRate.direction === 'round_trip') return '↔'
+                          return ''
+                        }
+                        return (
+                          <div key={`service-${index}`} className="border rounded-lg p-2 bg-purple-50/50 dark:bg-purple-950/20 border-purple-200">
+                            <div className="flex justify-between items-start gap-2 mb-2">
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium truncate">
+                                  {item.serviceRate.categoryName}
+                                  {item.serviceRate.direction && (
+                                    <span className="ml-1 text-purple-600">{getDirectionIcon()}</span>
+                                  )}
+                                </p>
+                                <p className="text-xs text-muted-foreground truncate">{inventoryType?.name}</p>
+                                <div className="flex gap-1 mt-1 flex-wrap">
+                                  <Badge variant="outline" className="text-[10px] px-1 py-0 h-4">
+                                    {item.serviceRate.pricing_unit.replace('_', ' ')}
+                                  </Badge>
+                                  {item.serviceRate.direction && (
+                                    <Badge variant="secondary" className="text-[10px] px-1 py-0 h-4 bg-purple-100 text-purple-700 capitalize">
+                                      {item.serviceRate.direction === 'inbound' ? 'Arrival' :
+                                       item.serviceRate.direction === 'outbound' ? 'Departure' :
+                                       item.serviceRate.direction.replace('_', ' ')}
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                              <Button 
+                                variant="ghost" 
+                                size="icon"
+                                className="h-6 w-6 flex-shrink-0"
+                                onClick={() => removeServiceFromCart(index)}
+                              >
+                                <Trash2 className="h-3 w-3 text-destructive" />
+                              </Button>
+                            </div>
+                            <div className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground">Qty: {item.quantity}</span>
+                              <div className="text-right">
+                                <p className="font-bold">{formatCurrency(item.totalPrice)}</p>
+                                <p className="text-[10px] text-muted-foreground">{formatCurrency(item.serviceRate.selling_price)} each</p>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })}
+                      
                       {/* Cart Summary */}
                       <div className="space-y-2">
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Rooms:</span>
-                          <span className="font-medium">{cartRoomCount}</span>
-                        </div>
-                        <div className="flex justify-between text-sm">
-                          <span className="text-muted-foreground">Nights:</span>
-                          <span className="font-medium">{nights}</span>
-                        </div>
+                        {cart.length > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Rooms:</span>
+                            <span className="font-medium">{cartRoomCount} ({nights}n)</span>
+                          </div>
+                        )}
+                        {serviceCart.length > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-muted-foreground">Services:</span>
+                            <span className="font-medium">{cartServiceCount}</span>
+                          </div>
+                        )}
                         <div className="flex justify-between text-lg font-bold">
                           <span>Total:</span>
                           <span className="text-primary">{formatCurrency(cartTotal)}</span>
@@ -1235,6 +1619,16 @@ export function BookingsCreate() {
                           value={customerEmail}
                           onChange={(e) => setCustomerEmail(e.target.value)}
                           placeholder="john@example.com"
+                          className="h-9 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Phone *</Label>
+                        <Input 
+                          type="tel"
+                          value={customerPhone}
+                          onChange={(e) => setCustomerPhone(e.target.value)}
+                          placeholder="+1 555-123-4567"
                           className="h-9 text-sm"
                         />
                       </div>

@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 
 interface ContractFormProps {
   formData: {
+    supplier_id: number
     hotel_id: number
     contract_name: string
     start_date: string
@@ -56,6 +57,7 @@ interface ContractFormProps {
   }
   setFormData: (data: any) => void
   hotels: any[]
+  suppliers: any[]
   tours: any[]
   selectedHotel?: any
   boardTypeInput: BoardType
@@ -87,6 +89,7 @@ export function ContractForm({
   formData,
   setFormData,
   hotels,
+  suppliers,
   tours,
   selectedHotel,
   boardTypeInput,
@@ -128,24 +131,45 @@ export function ContractForm({
   return (
     <div className="grid gap-4 py-4">
       {!isEditing && (
-        <div className="grid gap-2">
-          <Label htmlFor="hotel_id">Hotel *</Label>
-          <Select
-            value={formData.hotel_id.toString()}
-            onValueChange={(value) => setFormData({ ...formData, hotel_id: parseInt(value) })}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select a hotel" />
-            </SelectTrigger>
-            <SelectContent>
-              {hotels.map((hotel) => (
-                <SelectItem key={hotel.id} value={hotel.id.toString()}>
-                  {hotel.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <>
+          <div className="grid gap-2">
+            <Label htmlFor="supplier_id">Supplier *</Label>
+            <Select
+              value={formData.supplier_id.toString()}
+              onValueChange={(value) => setFormData({ ...formData, supplier_id: parseInt(value) })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a supplier" />
+              </SelectTrigger>
+              <SelectContent>
+                {suppliers.filter(s => s.active).map((supplier) => (
+                  <SelectItem key={supplier.id} value={supplier.id.toString()}>
+                    {supplier.name} ({supplier.type})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="grid gap-2">
+            <Label htmlFor="hotel_id">Hotel *</Label>
+            <Select
+              value={formData.hotel_id.toString()}
+              onValueChange={(value) => setFormData({ ...formData, hotel_id: parseInt(value) })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a hotel" />
+              </SelectTrigger>
+              <SelectContent>
+                {hotels.map((hotel) => (
+                  <SelectItem key={hotel.id} value={hotel.id.toString()}>
+                    {hotel.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </>
       )}
 
       <div className="grid gap-2">

@@ -14,29 +14,68 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { useData, Tour, BoardType } from '@/contexts/data-context'
-import { Plus, Hotel, Trash2 } from 'lucide-react'
+import { Plus, Hotel, Trash2, DollarSign, Check, Car, Ticket, PartyPopper, UtensilsCrossed, Package } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
+import { BOARD_TYPE_LABELS } from '@/lib/pricing'
 import { toast } from 'sonner'
 
+const getServiceIcon = (type: string) => {
+  switch (type) {
+    case 'transfer': return Car
+    case 'ticket': return Ticket
+    case 'activity': return PartyPopper
+    case 'meal': return UtensilsCrossed
+    case 'accommodation': return Hotel
+    default: return Package
+  }
+}
+
+const SERVICE_TYPE_LABELS: Record<string, string> = {
+  accommodation: 'Accommodation',
+  transfer: 'Transfer',
+  ticket: 'Ticket / Event',
+  activity: 'Activity / Tour',
+  meal: 'Meal',
+  other: 'Other Service'
+}
+
 export function Tours() {
-  const { tours, addTour, updateTour, deleteTour, tourComponents, addTourComponent, deleteTourComponent, hotels } = useData()
+  const { tours, addTour, updateTour, deleteTour, tourComponents, addTourComponent, deleteTourComponent, hotels, suppliers } = useData()
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isEditOpen, setIsEditOpen] = useState(false)
   const [editingTour, setEditingTour] = useState<Tour | null>(null)
   const [isViewOpen, setIsViewOpen] = useState(false)
   const [viewingTour, setViewingTour] = useState<Tour | null>(null)
   const [isComponentOpen, setIsComponentOpen] = useState(false)
+  const [componentType, setComponentType] = useState<'accommodation' | 'service'>('accommodation')
   const [componentForm, setComponentForm] = useState({
+    // Common
+    component_type: 'accommodation' as 'accommodation' | 'transfer' | 'activity' | 'meal' | 'ticket' | 'other',
+    label: '',
+    check_in_date: '',
+    check_out_date: '',
+    included_in_base_price: true,
+    pricing_mode: 'use_contract' as 'use_contract' | 'fixed_price' | 'use_service_inventory',
+    
+    // Hotel-specific
     hotel_id: 0,
     room_group_id: '',
-    check_in_day: 1,
-    nights: 1,
     board_type: 'bed_breakfast' as BoardType,
-    pricing_mode: 'use_contract' as 'use_contract' | 'fixed_price',
-    included_in_base_price: true,
-    label: '',
+    
+    // Service-specific
+    service_inventory_id: 0,
+    service_name: '',
+    provider_id: 0,
+    inventory_source: 'buy_to_order' as 'contract' | 'buy_to_order',
+    quantity_per_booking: 1,
+    pricing_unit: 'per_person' as 'per_person' | 'per_vehicle' | 'per_group' | 'flat_rate',
+    
+    // Pricing
+    fixed_cost_per_couple: 0,
+    fixed_sell_per_couple: 0,
   })
   const [formData, setFormData] = useState({
     name: '',
@@ -83,6 +122,14 @@ export function Tours() {
   const handleView = (tour: Tour) => {
     setViewingTour(tour)
     setIsViewOpen(true)
+    setComponentType('accommodation')
+    resetComponentForm()
+  }
+  
+  const handleOpenComponentDialog = (type: 'accommodation' | 'service') => {
+    setComponentType(type)
+    resetComponentForm()
+    setIsComponentOpen(true)
   }
 
   const handleDelete = (tour: Tour) => {
@@ -94,30 +141,84 @@ export function Tours() {
   const handleAddComponent = () => {
     if (!viewingTour) return
     
-    addTourComponent({
+    if (!componentForm.check_in_date || !componentForm.check_out_date) {
+      toast.error('Please fill in dates')
+      return
+    }
+    
+    // Calculate check_in_day from tour start date
+    const tourStart = new Date(viewingTour.start_date)
+    const componentCheckIn = new Date(componentForm.check_in_date)
+    const componentCheckOut = new Date(componentForm.check_out_date)
+    
+    // Calculate day number (1-based: tour start = Day 1)
+    const daysDiff = Math.ceil((componentCheckIn.getTime() - tourStart.getTime()) / (1000 * 60 * 60 * 24))
+    const check_in_day = daysDiff + 1
+    
+    // Calculate nights
+    const nights = Math.ceil((componentCheckOut.getTime() - componentCheckIn.getTime()) / (1000 * 60 * 60 * 24))
+    
+    // Build component data based on type
+    const baseComponent = {
       tour_id: viewingTour.id,
-      component_type: 'accommodation',
-      check_in_day: componentForm.check_in_day,
-      nights: componentForm.nights,
+      component_type: componentForm.component_type,
+      check_in_day: check_in_day,
+      nights: componentType === 'accommodation' ? nights : undefined,
+      pricing_mode: componentForm.pricing_mode,
+      included_in_base_price: componentForm.included_in_base_price,
+      label: componentForm.label,
+    }
+    
+    if (componentType === 'accommodation') {
+      // Hotel component
+    addTourComponent({
+        ...baseComponent,
       hotel_id: componentForm.hotel_id,
       room_group_id: componentForm.room_group_id,
       board_type: componentForm.board_type,
-      pricing_mode: componentForm.pricing_mode,
-      included_in_base_price: componentForm.included_in_base_price,
-      label: componentForm.label
-    })
+        nights: nights,
+        fixed_cost_per_couple: componentForm.pricing_mode === 'fixed_price' ? componentForm.fixed_cost_per_couple : undefined,
+        fixed_sell_per_couple: componentForm.pricing_mode === 'fixed_price' ? componentForm.fixed_sell_per_couple : undefined,
+      })
+    } else {
+      // Service component
+      addTourComponent({
+        ...baseComponent,
+        service_inventory_id: componentForm.pricing_mode === 'use_service_inventory' ? componentForm.service_inventory_id : undefined,
+        service_name: componentForm.service_name,
+        provider: suppliers.find(s => s.id === componentForm.provider_id)?.name,
+        inventory_source: componentForm.inventory_source,
+        quantity_per_booking: componentForm.quantity_per_booking,
+        pricing_unit: componentForm.pricing_unit,
+        cost_per_couple: componentForm.pricing_mode === 'fixed_price' ? componentForm.fixed_cost_per_couple : undefined,
+        sell_per_couple: componentForm.pricing_mode === 'fixed_price' ? componentForm.fixed_sell_per_couple : undefined,
+      })
+    }
     
     toast.success('Component added to tour')
     setIsComponentOpen(false)
+    resetComponentForm()
+  }
+  
+  const resetComponentForm = () => {
     setComponentForm({
+      component_type: componentType === 'accommodation' ? 'accommodation' : 'transfer',
+      label: '',
+      check_in_date: viewingTour?.start_date || '',
+      check_out_date: viewingTour?.end_date || '',
+      included_in_base_price: true,
+      pricing_mode: componentType === 'accommodation' ? 'use_contract' : 'use_service_inventory',
       hotel_id: 0,
       room_group_id: '',
-      check_in_day: 1,
-      nights: 1,
       board_type: 'bed_breakfast',
-      pricing_mode: 'use_contract',
-      included_in_base_price: true,
-      label: '',
+      service_inventory_id: 0,
+      service_name: '',
+      provider_id: 0,
+      inventory_source: 'buy_to_order',
+      quantity_per_booking: 1,
+      pricing_unit: 'per_person',
+      fixed_cost_per_couple: 0,
+      fixed_sell_per_couple: 0,
     })
   }
 
@@ -182,15 +283,6 @@ export function Tours() {
           </DialogContent>
         </Dialog>
       </div>
-
-      <DataTable
-        title="Tours"
-        columns={columns}
-        data={tours}
-        onEdit={handleEdit}
-        onDelete={handleDelete}
-        searchable
-      />
 
       {/* Edit Dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
@@ -270,16 +362,22 @@ export function Tours() {
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h3 className="font-medium">Tour Components</h3>
-                  <Button size="sm" onClick={() => setIsComponentOpen(true)}>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => handleOpenComponentDialog('accommodation')}>
+                      <Plus className="h-4 w-4 mr-1" />
+                      Add Hotel
+                    </Button>
+                    <Button size="sm" onClick={() => handleOpenComponentDialog('service')}>
                     <Plus className="h-4 w-4 mr-1" />
-                    Add Hotel Stay
+                      Add Service
                   </Button>
+                  </div>
                 </div>
 
                 {tourComponents.filter((c: any) => c.tour_id === viewingTour.id).length === 0 ? (
                   <Card>
                     <CardContent className="py-8 text-center text-muted-foreground">
-                      No components added yet. Click "Add Hotel Stay" to build your package.
+                      No components added yet. Add hotels and services to build your package.
                     </CardContent>
                   </Card>
                 ) : (
@@ -288,32 +386,124 @@ export function Tours() {
                       .filter((c: any) => c.tour_id === viewingTour.id)
                       .sort((a: any, b: any) => a.check_in_day - b.check_in_day)
                       .map((component: any) => {
-                        const hotel = hotels.find(h => h.id === component.hotel_id)
+                        // Calculate actual dates from check_in_day
+                        const tourStart = new Date(viewingTour.start_date)
+                        const componentCheckIn = new Date(tourStart)
+                        componentCheckIn.setDate(componentCheckIn.getDate() + (component.check_in_day - 1))
+                        const componentCheckOut = new Date(componentCheckIn)
+                        componentCheckOut.setDate(componentCheckOut.getDate() + (component.nights || 1))
+                        
+                        const checkInStr = componentCheckIn.toISOString().split('T')[0]
+                        const checkOutStr = componentCheckOut.toISOString().split('T')[0]
+                        
+                        const IconComponent = getServiceIcon(component.component_type)
+                        const isAccommodation = component.component_type === 'accommodation'
+                        
+                        // Accommodation-specific data
+                        const hotel = isAccommodation ? hotels.find(h => h.id === component.hotel_id) : null
                         const roomGroup = hotel?.room_groups?.find(rg => rg.id === component.room_group_id)
                         
                         return (
-                          <Card key={component.id} className="border-l-4 border-l-blue-500">
+                          <Card key={component.id} className="border-l-4 border-l-primary">
                             <CardContent className="py-3">
-                              <div className="flex items-start justify-between">
-                                <div className="space-y-1 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <Hotel className="h-4 w-4 text-blue-600" />
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="space-y-2 flex-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <IconComponent className="h-4 w-4 text-primary flex-shrink-0" />
                                     <span className="font-medium">{component.label || hotel?.name}</span>
+                                    <Badge variant="outline" className="text-xs">
+                                      {SERVICE_TYPE_LABELS[component.component_type] || component.component_type}
+                                    </Badge>
                                     {component.included_in_base_price ? (
-                                      <Badge variant="default" className="text-xs">Included</Badge>
+                                      <Badge variant="default" className="text-xs">
+                                        <Check className="h-3 w-3 mr-1" />
+                                        Included
+                                      </Badge>
                                     ) : (
-                                      <Badge variant="secondary" className="text-xs">Optional</Badge>
+                                      <Badge variant="secondary" className="text-xs">Optional Add-on</Badge>
+                                    )}
+                                    {component.pricing_mode === 'fixed_price' && (
+                                      <Badge variant="outline" className="text-xs">
+                                        <DollarSign className="h-3 w-3 mr-1" />
+                                        Fixed Price
+                                      </Badge>
                                     )}
                                   </div>
+                                  
                                   <div className="text-sm text-muted-foreground space-y-1">
-                                    <div>📍 {hotel?.name} - {roomGroup?.room_type || 'Double Room'}</div>
-                                    <div>📅 Day {component.check_in_day} • {component.nights} night{component.nights !== 1 ? 's' : ''} • {component.board_type?.replace('_', ' ')}</div>
-                                    <div>💰 Pricing: {component.pricing_mode === 'use_contract' ? 'Uses contract rates' : 'Fixed price'}</div>
+                                    {/* Accommodation details */}
+                                    {isAccommodation && (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-foreground">{hotel?.name}</span>
+                                          <span>•</span>
+                                          <span>{roomGroup?.room_type || 'Double Room'}</span>
+                                        </div>
+                                        <div className="flex items-center gap-3 flex-wrap">
+                                          <span>{checkInStr} → {checkOutStr}</span>
+                                          <span>•</span>
+                                          <span>{component.nights} night{component.nights !== 1 ? 's' : ''}</span>
+                                          <span>•</span>
+                                          <span>{BOARD_TYPE_LABELS[component.board_type] || component.board_type}</span>
+                                        </div>
+                                      </>
+                                    )}
+                                    
+                                    {/* Service details */}
+                                    {!isAccommodation && (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <span className="font-medium text-foreground">{component.service_name}</span>
+                                          {component.provider && (
+                                            <>
+                                              <span>•</span>
+                                              <span>{component.provider}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                        <div className="flex items-center gap-3 flex-wrap">
+                                          <span>{checkInStr}</span>
+                                          {component.inventory_source && (
+                                            <>
+                                              <span>•</span>
+                                              <span className={component.inventory_source === 'contract' ? 'text-green-600' : 'text-blue-600'}>
+                                                {component.inventory_source === 'contract' ? 'Contract' : 'Buy-to-Order'}
+                                              </span>
+                                            </>
+                                          )}
+                                          {component.pricing_unit && (
+                                            <>
+                                              <span>•</span>
+                                              <span>{component.pricing_unit.replace('_', ' ')}</span>
+                                            </>
+                                          )}
+                                          {component.quantity_per_booking && (
+                                            <>
+                                              <span>•</span>
+                                              <span>Qty: {component.quantity_per_booking}</span>
+                                            </>
+                                          )}
+                                        </div>
+                                      </>
+                                    )}
+                                    
+                                    {/* Fixed pricing details */}
+                                    {component.pricing_mode === 'fixed_price' && (
+                                      <div className="flex items-center gap-3 text-xs pt-1">
+                                        <span>Cost: €{(isAccommodation ? component.fixed_cost_per_couple : component.cost_per_couple) || 0}</span>
+                                        <span>•</span>
+                                        <span>Sell: €{(isAccommodation ? component.fixed_sell_per_couple : component.sell_per_couple) || 0}</span>
+                                        <span className="text-green-600">
+                                          • Margin: €{((isAccommodation ? component.fixed_sell_per_couple : component.sell_per_couple) || 0) - ((isAccommodation ? component.fixed_cost_per_couple : component.cost_per_couple) || 0)}
+                                        </span>
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
                                 <Button
                                   variant="ghost"
                                   size="sm"
+                                  className="flex-shrink-0"
                                   onClick={() => {
                                     if (confirm('Remove this component?')) {
                                       deleteTourComponent(component.id)
@@ -342,44 +532,86 @@ export function Tours() {
 
       {/* Add Component Dialog */}
       <Dialog open={isComponentOpen} onOpenChange={setIsComponentOpen}>
-        <DialogContent>
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Add Hotel Stay Component</DialogTitle>
-            <DialogDescription>Add accommodation to {viewingTour?.name}</DialogDescription>
+            <DialogTitle>
+              {componentType === 'accommodation' ? 'Add Hotel Component' : 'Add Service Component'}
+            </DialogTitle>
+            <DialogDescription>Add {componentType} to {viewingTour?.name}</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4">
+            {/* Component Type (for services only) */}
+            {componentType === 'service' && (
+              <div className="grid gap-2">
+                <Label>Service Type *</Label>
+                <Select
+                  value={componentForm.component_type}
+                  onValueChange={(value: any) => setComponentForm({ ...componentForm, component_type: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="transfer">Transfer</SelectItem>
+                    <SelectItem value="ticket">Ticket</SelectItem>
+                    <SelectItem value="activity">Activity</SelectItem>
+                    <SelectItem value="meal">Meal</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            
+            {/* Common Fields */}
             <div className="grid gap-2">
-              <Label>Label *</Label>
+              <Label>Component Label *</Label>
               <Input
                 value={componentForm.label}
                 onChange={(e) => setComponentForm({ ...componentForm, label: e.target.value })}
-                placeholder="e.g., Paris City Center Hotel"
+                placeholder={componentType === 'accommodation' ? 'e.g., Paris City Center Hotel' : 'e.g., Airport Transfer, F1 Grandstand Ticket'}
               />
+              <p className="text-xs text-muted-foreground">Descriptive name for this component</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div className="grid gap-2">
-                <Label>Check-in Day *</Label>
+                <Label>{componentType === 'accommodation' ? 'Check-in Date' : 'Start Date'} *</Label>
                 <Input
-                  type="number"
-                  min={1}
-                  value={componentForm.check_in_day}
-                  onChange={(e) => setComponentForm({ ...componentForm, check_in_day: parseInt(e.target.value) || 1 })}
+                  type="date"
+                  value={componentForm.check_in_date}
+                  onChange={(e) => setComponentForm({ ...componentForm, check_in_date: e.target.value })}
+                  min={viewingTour?.start_date}
+                  max={viewingTour?.end_date}
                 />
-                <p className="text-xs text-muted-foreground">Day 1, Day 2, etc.</p>
+                <p className="text-xs text-muted-foreground">
+                  Tour: {viewingTour?.start_date}
+                </p>
               </div>
               <div className="grid gap-2">
-                <Label>Nights *</Label>
+                <Label>{componentType === 'accommodation' ? 'Check-out Date' : 'End Date'} *</Label>
                 <Input
-                  type="number"
-                  min={1}
-                  value={componentForm.nights}
-                  onChange={(e) => setComponentForm({ ...componentForm, nights: parseInt(e.target.value) || 1 })}
+                  type="date"
+                  value={componentForm.check_out_date}
+                  onChange={(e) => setComponentForm({ ...componentForm, check_out_date: e.target.value })}
+                  min={componentForm.check_in_date || viewingTour?.start_date}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {componentForm.check_in_date && componentForm.check_out_date && (() => {
+                    const checkIn = new Date(componentForm.check_in_date)
+                    const checkOut = new Date(componentForm.check_out_date)
+                    const nights = Math.ceil((checkOut.getTime() - checkIn.getTime()) / (1000 * 60 * 60 * 24))
+                    return componentType === 'accommodation'
+                      ? `${nights} night${nights !== 1 ? 's' : ''}`
+                      : `${nights} day${nights !== 1 ? 's' : ''}`
+                  })()}
+                </p>
               </div>
             </div>
 
+            {/* ACCOMMODATION-SPECIFIC FIELDS */}
+            {componentType === 'accommodation' && (
+              <>
             <div className="grid gap-2">
               <Label>Hotel *</Label>
               <Select
@@ -430,25 +662,243 @@ export function Tours() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="room_only">Room Only</SelectItem>
-                  <SelectItem value="bed_breakfast">Bed & Breakfast</SelectItem>
-                  <SelectItem value="half_board">Half Board</SelectItem>
-                  <SelectItem value="full_board">Full Board</SelectItem>
-                  <SelectItem value="all_inclusive">All Inclusive</SelectItem>
+                      <SelectItem value="room_only">{BOARD_TYPE_LABELS.room_only}</SelectItem>
+                      <SelectItem value="bed_breakfast">{BOARD_TYPE_LABELS.bed_breakfast}</SelectItem>
+                      <SelectItem value="half_board">{BOARD_TYPE_LABELS.half_board}</SelectItem>
+                      <SelectItem value="full_board">{BOARD_TYPE_LABELS.full_board}</SelectItem>
+                      <SelectItem value="all_inclusive">{BOARD_TYPE_LABELS.all_inclusive}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </>
+            )}
+
+            {/* SERVICE-SPECIFIC FIELDS */}
+            {componentType === 'service' && (
+              <>
+                <div className="grid gap-2">
+                  <Label>Service Name *</Label>
+                  <Input
+                    value={componentForm.service_name}
+                    onChange={(e) => setComponentForm({ ...componentForm, service_name: e.target.value })}
+                    placeholder="e.g., Airport Transfer, F1 Ticket - Grandstand"
+                  />
+                </div>
+
+                <div className="grid gap-2">
+                  <Label>Supplier</Label>
+                  <Select
+                    value={componentForm.provider_id.toString()}
+                    onValueChange={(value) => setComponentForm({ ...componentForm, provider_id: parseInt(value) })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select supplier (optional)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">Not assigned yet</SelectItem>
+                      {suppliers.filter(s => s.active).map(supplier => (
+                        <SelectItem key={supplier.id} value={supplier.id.toString()}>
+                          {supplier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">Can be assigned later during operations</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="grid gap-2">
+                    <Label>Inventory Source *</Label>
+                    <Select
+                      value={componentForm.inventory_source}
+                      onValueChange={(value: 'contract' | 'buy_to_order') => setComponentForm({ ...componentForm, inventory_source: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="contract">Contract (Pre-purchased)</SelectItem>
+                        <SelectItem value="buy_to_order">Buy-to-Order (Quote later)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            <div className="p-3 bg-blue-50 rounded border border-blue-200">
-              <p className="text-sm text-blue-900">
-                💡 <strong>Per Couple Pricing:</strong> System will use your contract rates at booking time (always double occupancy for 2 people)
-              </p>
+                  <div className="grid gap-2">
+                    <Label>Pricing Unit *</Label>
+                    <Select
+                      value={componentForm.pricing_unit}
+                      onValueChange={(value: any) => setComponentForm({ ...componentForm, pricing_unit: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="per_person">Per Person</SelectItem>
+                        <SelectItem value="per_vehicle">Per Vehicle</SelectItem>
+                        <SelectItem value="per_group">Per Group</SelectItem>
+                        <SelectItem value="flat_rate">Flat Rate</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                <div className="grid gap-2">
+                  <Label>Quantity per Booking *</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={componentForm.quantity_per_booking}
+                    onChange={(e) => setComponentForm({ ...componentForm, quantity_per_booking: parseInt(e.target.value) || 1 })}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    e.g., 2 tickets per couple, 1 vehicle per group
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Pricing Mode Selection */}
+            <div className="border-t pt-4 space-y-3">
+              <Label>Pricing Mode *</Label>
+              <div className="grid gap-3">
+                <div 
+                  className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                    componentForm.pricing_mode === (componentType === 'accommodation' ? 'use_contract' : 'use_service_inventory')
+                      ? 'border-primary bg-primary/5' 
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                  onClick={() => setComponentForm({ 
+                    ...componentForm, 
+                    pricing_mode: componentType === 'accommodation' ? 'use_contract' : 'use_service_inventory' 
+                  })}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                      componentForm.pricing_mode === (componentType === 'accommodation' ? 'use_contract' : 'use_service_inventory')
+                        ? 'border-primary bg-primary' 
+                        : 'border-muted-foreground'
+                    }`}>
+                      {componentForm.pricing_mode === (componentType === 'accommodation' ? 'use_contract' : 'use_service_inventory') && (
+                        <div className="h-2 w-2 rounded-full bg-primary-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-sm">
+                        {componentType === 'accommodation' ? 'Use Contract Rates' : 'Use Service Inventory'}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Price will be calculated from inventory at booking time
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div 
+                  className={`border rounded-lg p-3 cursor-pointer transition-colors ${
+                    componentForm.pricing_mode === 'fixed_price' 
+                      ? 'border-primary bg-primary/5' 
+                      : 'border-border hover:border-primary/50'
+                  }`}
+                  onClick={() => setComponentForm({ ...componentForm, pricing_mode: 'fixed_price' })}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className={`mt-0.5 h-4 w-4 rounded-full border-2 flex items-center justify-center ${
+                      componentForm.pricing_mode === 'fixed_price' 
+                        ? 'border-primary bg-primary' 
+                        : 'border-muted-foreground'
+                    }`}>
+                      {componentForm.pricing_mode === 'fixed_price' && (
+                        <div className="h-2 w-2 rounded-full bg-primary-foreground" />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-sm">Fixed Price</p>
+                      <p className="text-xs text-muted-foreground">
+                        Set specific cost and selling price for this component
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Fixed Price Fields */}
+              {componentForm.pricing_mode === 'fixed_price' && (
+                <div className="mt-3 space-y-3 p-3 bg-muted/30 rounded-lg">
+                  <p className="text-sm font-medium">Fixed Pricing (per couple)</p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="grid gap-2">
+                      <Label className="text-xs">Cost Price</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={componentForm.fixed_cost_per_couple}
+                        onChange={(e) => setComponentForm({ ...componentForm, fixed_cost_per_couple: parseFloat(e.target.value) || 0 })}
+                        placeholder="0.00"
+                      />
+                    </div>
+                    <div className="grid gap-2">
+                      <Label className="text-xs">Selling Price</Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={componentForm.fixed_sell_per_couple}
+                        onChange={(e) => setComponentForm({ ...componentForm, fixed_sell_per_couple: parseFloat(e.target.value) || 0 })}
+                        placeholder="0.00"
+                      />
+                    </div>
+                  </div>
+                  {componentForm.fixed_sell_per_couple > 0 && (
+                    <div className="text-xs text-muted-foreground">
+                      Margin: €{(componentForm.fixed_sell_per_couple - componentForm.fixed_cost_per_couple).toFixed(2)}
+                      {componentForm.fixed_cost_per_couple > 0 && (
+                        <span className="ml-2">
+                          ({(((componentForm.fixed_sell_per_couple - componentForm.fixed_cost_per_couple) / componentForm.fixed_cost_per_couple) * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Included/Optional Toggle */}
+            <div className="flex items-center space-x-2 border-t pt-4">
+              <Checkbox 
+                id="included"
+                checked={componentForm.included_in_base_price}
+                onCheckedChange={(checked) => setComponentForm({ ...componentForm, included_in_base_price: !!checked })}
+              />
+              <div className="grid gap-1.5 leading-none">
+                <label
+                  htmlFor="included"
+                  className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                >
+                  Include in base tour price
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  {componentForm.included_in_base_price 
+                    ? 'This component is included in the package' 
+                    : 'This is an optional add-on with extra charge'}
+                </p>
+              </div>
             </div>
           </div>
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsComponentOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddComponent} disabled={!componentForm.hotel_id || !componentForm.room_group_id || !componentForm.label}>
+            <Button 
+              onClick={handleAddComponent} 
+              disabled={
+                !componentForm.label ||
+                !componentForm.check_in_date ||
+                !componentForm.check_out_date ||
+                (componentType === 'accommodation' && (!componentForm.hotel_id || !componentForm.room_group_id)) ||
+                (componentType === 'service' && !componentForm.service_name) ||
+                (componentForm.pricing_mode === 'fixed_price' && (!componentForm.fixed_cost_per_couple || !componentForm.fixed_sell_per_couple))
+              }
+            >
               Add Component
             </Button>
           </DialogFooter>

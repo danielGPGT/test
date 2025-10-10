@@ -5,14 +5,17 @@ import { DashboardLayout } from '@/components/layout/dashboard-layout'
 import { Toaster } from '@/components/ui/sonner'
 import { Dashboard } from '@/pages/dashboard'
 import { Tours } from '@/pages/tours'
-import { Hotels } from '@/pages/hotels'
-import { Contracts } from '@/pages/contracts'
-import { Rates } from '@/pages/rates'
+
 import { InventorySetup } from '@/pages/inventory-setup'
-import { Listings } from '@/pages/listings'
+import { ServiceInventoryNew } from '@/pages/service-inventory'
+import { ServiceProviders } from '@/pages/service-providers'
+import { Operations } from '@/pages/operations'
 import { Bookings } from '@/pages/bookings'
-import { BookingsNew } from '@/pages/bookings-new'
+
 import { BookingsCreate } from '@/pages/bookings-create'
+import { RoomingList } from '@/pages/rooming-list'
+import { Suppliers } from '@/pages/suppliers'
+import { Payments } from '@/pages/payments'
 import { Reports } from '@/pages/reports'
 
 function App() {
@@ -24,14 +27,17 @@ function App() {
             <Route path="/" element={<DashboardLayout />}>
               <Route index element={<Dashboard />} />
               <Route path="tours" element={<Tours />} />
-              <Route path="hotels" element={<Hotels />} />
-              <Route path="contracts" element={<Contracts />} />
-              <Route path="rates" element={<Rates />} />
+
               <Route path="inventory" element={<InventorySetup />} />
-              <Route path="listings" element={<Listings />} />
+              <Route path="service-inventory" element={<ServiceInventoryNew />} />
+              <Route path="service-providers" element={<ServiceProviders />} />
+              <Route path="operations" element={<Operations />} />
+              <Route path="suppliers" element={<Suppliers />} />
+              <Route path="payments" element={<Payments />} />
               <Route path="bookings" element={<Bookings />} />
-              <Route path="bookings-new" element={<BookingsNew />} />
+
               <Route path="bookings/create" element={<BookingsCreate />} />
+              <Route path="rooming-list" element={<RoomingList />} />
               <Route path="reports" element={<Reports />} />
             </Route>
           </Routes>

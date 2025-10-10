@@ -32,7 +32,26 @@ import {
   MapPin,
   Calendar,
   Bed,
+  Home,
+  Crown,
 } from 'lucide-react'
+
+// Smart icon detection based on room type name
+function getRoomIcon(roomType: string) {
+  const lowerType = roomType.toLowerCase()
+  
+  if (lowerType.includes('suite') || lowerType.includes('presidential')) {
+    return Crown // Luxury suites
+  }
+  if (lowerType.includes('deluxe') || lowerType.includes('premium') || lowerType.includes('executive')) {
+    return Star // Premium rooms
+  }
+  if (lowerType.includes('standard') || lowerType.includes('classic') || lowerType.includes('superior')) {
+    return Home // Standard rooms
+  }
+  
+  return Bed // Default for all other types
+}
 import { useData, Rate, BoardType, OccupancyType, RoomGroup, BoardOption, AttritionStage, CancellationStage, PaymentSchedule, RoomAllocation, OccupancyRate } from '@/contexts/data-context'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { cn } from '@/lib/utils'
@@ -49,7 +68,7 @@ import { ContractForm } from '@/components/forms/contract-form'
 
 export function InventorySetup() {
   const { 
-    hotels, contracts, rates, bookings, tours,
+    hotels, suppliers, contracts, rates, bookings, tours,
     addHotel, updateHotel, deleteHotel,
     addContract, updateContract, deleteContract,
     addRate, updateRate, deleteRate
@@ -83,6 +102,7 @@ export function InventorySetup() {
   const [isContractDialogOpen, setIsContractDialogOpen] = useState(false)
   const [editingContract, setEditingContract] = useState<any | null>(null)
   const [contractForm, setContractForm] = useState({
+    supplier_id: 0,
     hotel_id: 0,
     contract_name: '',
     start_date: '',
@@ -136,6 +156,9 @@ export function InventorySetup() {
     board_type: 'bed_breakfast' as BoardType,
     occupancy_type: 'double' as OccupancyType,
     base_rate: 0,
+    // Status
+    active: true,
+    inactive_reason: '',
     // Validity dates (default from contract)
     valid_from: '',
     valid_to: '',
@@ -270,6 +293,16 @@ export function InventorySetup() {
       return
     }
     
+    // Check for duplicate room type names
+    const isDuplicate = hotelForm.room_groups.some(rg => 
+      rg.room_type.toLowerCase() === roomGroupForm.room_type.toLowerCase()
+    )
+    
+    if (isDuplicate) {
+      toast.error('A room type with this name already exists')
+      return
+    }
+    
     const newRoomGroup: RoomGroup = {
       id: `rg_${Date.now()}`,
       room_type: roomGroupForm.room_type,
@@ -282,6 +315,8 @@ export function InventorySetup() {
       ...hotelForm,
       room_groups: [...hotelForm.room_groups, newRoomGroup]
     })
+    
+    toast.success('Room type added')
     
     setRoomGroupForm({
       room_type: '',
@@ -350,6 +385,7 @@ export function InventorySetup() {
     if (contract) {
       setEditingContract(contract)
       setContractForm({
+        supplier_id: contract.supplier_id || 0,
         hotel_id: contract.hotel_id,
         contract_name: contract.contract_name,
         start_date: contract.start_date,
@@ -382,6 +418,7 @@ export function InventorySetup() {
     } else {
       setEditingContract(null)
       setContractForm({
+        supplier_id: 0,
         hotel_id: selectedHotelId || 0,
         contract_name: '',
         start_date: '',
@@ -429,12 +466,13 @@ export function InventorySetup() {
   }
 
   const handleSaveContract = () => {
-    if (!contractForm.hotel_id || !contractForm.contract_name || !contractForm.start_date || !contractForm.end_date) {
+    if (!contractForm.supplier_id || !contractForm.hotel_id || !contractForm.contract_name || !contractForm.start_date || !contractForm.end_date) {
       alert('Please fill in all required fields')
       return
     }
 
     const contractData = {
+      supplier_id: contractForm.supplier_id,
       hotel_id: contractForm.hotel_id,
       contract_name: contractForm.contract_name,
       start_date: contractForm.start_date,
@@ -535,7 +573,17 @@ export function InventorySetup() {
           </CardHeader>
           <ScrollArea className="flex-1">
             <CardContent className="space-y-2">
-              {hotelStats.map(({ hotel, contractCount, roomGroupCount }) => (
+              {hotelStats.map(({ hotel, contractCount, roomGroupCount }) => {
+                // Calculate rate coverage for this hotel
+                const roomsWithRates = new Set<string>()
+                rates
+                  .filter(r => {
+                    const rateContract = contracts.find(c => c.id === r.contract_id)
+                    return (rateContract?.hotel_id === hotel.id || r.hotel_id === hotel.id) && r.active !== false
+                  })
+                  .forEach(r => roomsWithRates.add(r.room_group_id))
+                
+                return (
                 <div
                   key={hotel.id}
                   onClick={() => {
@@ -547,58 +595,91 @@ export function InventorySetup() {
                     selectedHotelId === hotel.id && "bg-accent border-primary"
                   )}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <p className="text-sm font-medium truncate">{hotel.name}</p>
-                        {hotel.star_rating && (
-                          <div className="flex items-center gap-0.5">
-                            {Array.from({ length: hotel.star_rating }).map((_, i) => (
-                              <Star key={i} className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
-                            ))}
-                          </div>
-                        )}
+                  <div className="space-y-2">
+                    {/* Header */}
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-sm font-medium truncate">{hotel.name}</p>
+                          {hotel.star_rating && (
+                            <div className="flex items-center gap-0.5">
+                              {Array.from({ length: hotel.star_rating }).map((_, i) => (
+                                <Star key={i} className="h-2.5 w-2.5 fill-yellow-400 text-yellow-400" />
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
+                          <MapPin className="h-2.5 w-2.5" />
+                          <span className="truncate">{hotel.location}</span>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-1 text-xs text-muted-foreground mt-0.5">
-                        <MapPin className="h-2.5 w-2.5" />
-                        <span className="truncate">{hotel.location}</span>
-                      </div>
-                      <div className="flex gap-1.5 mt-1">
-                        <Badge variant="outline" className="text-[10px] h-4 px-1">
-                          {contractCount}C
-                        </Badge>
-                        <Badge variant="outline" className="text-[10px] h-4 px-1">
-                          {roomGroupCount}R
-                        </Badge>
+                      <div className="flex gap-0.5">
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-5 w-5 p-0"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleOpenHotelDialog(hotel)
+                          }}
+                        >
+                          <Pencil className="h-3 w-3" />
+                        </Button>
+                        <Button 
+                          size="sm" 
+                          variant="ghost" 
+                          className="h-5 w-5 p-0 text-destructive"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteHotel(hotel.id)
+                          }}
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex gap-0.5">
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        className="h-5 w-5 p-0"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleOpenHotelDialog(hotel)
-                        }}
-                      >
-                        <Pencil className="h-3 w-3" />
-                      </Button>
-                      <Button 
-                        size="sm" 
-                        variant="ghost" 
-                        className="h-5 w-5 p-0 text-destructive"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          handleDeleteHotel(hotel.id)
-                        }}
-                      >
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
+
+                    {/* Room Types Preview */}
+                    {hotel.room_groups && hotel.room_groups.length > 0 && (
+                      <div className="space-y-1">
+                        {hotel.room_groups.slice(0, 3).map((rg) => {
+                          const hasActiveRates = roomsWithRates.has(rg.id)
+                          const RoomIcon = getRoomIcon(rg.room_type)
+                          
+                          return (
+                            <div key={rg.id} className="flex items-center gap-1.5 text-xs">
+                              <RoomIcon className="h-3 w-3 text-primary" />
+                              <span className="truncate flex-1">{rg.room_type}</span>
+                              <Badge variant="outline" className="text-[9px] h-4 px-1">
+                                {rg.capacity}p
+                              </Badge>
+                              {hasActiveRates && (
+                                <Badge variant="default" className="text-[9px] h-4 px-1 bg-green-600">✓</Badge>
+                              )}
+                            </div>
+                          )
+                        })}
+                        {hotel.room_groups.length > 3 && (
+                          <p className="text-[10px] text-muted-foreground pl-5">
+                            +{hotel.room_groups.length - 3} more...
+                          </p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stats */}
+                    <div className="flex gap-1.5 pt-1 border-t">
+                      <Badge variant="outline" className="text-[10px] h-4 px-1">
+                        {contractCount} contract{contractCount !== 1 ? 's' : ''}
+                      </Badge>
+                      <Badge variant="outline" className="text-[10px] h-4 px-1">
+                        {roomsWithRates.size}/{roomGroupCount} with rates
+                      </Badge>
                     </div>
                   </div>
                 </div>
-              ))}
+              )})}
               {hotels.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-8">
                   No hotels yet. Click + to add one.
@@ -638,7 +719,14 @@ export function InventorySetup() {
                     >
                       <div className="space-y-2">
                         <div className="flex items-start justify-between">
-                          <p className="font-medium">{contract.contract_name}</p>
+                          <div>
+                            <p className="font-medium">{contract.contract_name}</p>
+                            {contract.supplierName && (
+                              <p className="text-xs text-muted-foreground mt-0.5">
+                                via {contract.supplierName}
+                              </p>
+                            )}
+                          </div>
                           <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                             <Button 
                               size="icon" 
@@ -762,6 +850,9 @@ export function InventorySetup() {
                     board_type: 'bed_breakfast',
                     occupancy_type: 'double',
                     base_rate: selectedContract?.base_rate || 0,
+                    // Status
+                    active: true,
+                    inactive_reason: '',
                     // Default validity dates from contract
                     valid_from: selectedContract?.start_date || '',
                     valid_to: selectedContract?.end_date || '',
@@ -830,9 +921,16 @@ export function InventorySetup() {
                           <DollarSign className="h-4 w-4" />
                           Rates
                           {contractRates.length > 0 && (
-                            <Badge variant="secondary" className="ml-2">
-                              {contractRates.length}
-                            </Badge>
+                            <>
+                              <Badge variant="default" className="ml-2">
+                                {contractRates.filter(r => r.active !== false).length} Active
+                              </Badge>
+                              {contractRates.filter(r => r.active === false).length > 0 && (
+                                <Badge variant="secondary">
+                                  {contractRates.filter(r => r.active === false).length} Inactive
+                                </Badge>
+                              )}
+                            </>
                           )}
                         </div>
                       </AccordionTrigger>
@@ -862,11 +960,14 @@ export function InventorySetup() {
                         return (
                         <div
                           key={rate.id}
-                            className="p-2 rounded border hover:bg-accent transition-colors"
+                            className={cn(
+                              "p-2 rounded border hover:bg-accent transition-colors",
+                              rate.active === false && "opacity-50 bg-muted/50"
+                            )}
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                   <span className="font-medium text-sm truncate">{rate.roomName}</span>
                                   <Badge variant="secondary" className="text-xs shrink-0">
                                     {rate.occupancy_type === 'single' ? '1p' : rate.occupancy_type === 'double' ? '2p' : rate.occupancy_type === 'triple' ? '3p' : '4p'}
@@ -874,6 +975,17 @@ export function InventorySetup() {
                                   <Badge variant="outline" className="text-xs shrink-0">
                                   {BOARD_TYPE_LABELS[rate.board_type] || rate.board_type}
                                 </Badge>
+                                  <Badge 
+                                    variant={rate.active !== false ? "default" : "secondary"}
+                                    className="text-xs shrink-0 cursor-pointer hover:opacity-80"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      updateRate(rate.id, { active: !rate.active })
+                                      toast.success(rate.active === false ? 'Rate activated' : 'Rate deactivated')
+                                    }}
+                                  >
+                                    {rate.active !== false ? '✓ Active' : 'Inactive'}
+                                  </Badge>
                               </div>
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                   <span className="font-medium text-primary">
@@ -883,6 +995,11 @@ export function InventorySetup() {
                                   {boardCost > 0 && <span>+Board: {formatCurrency(boardCost)}</span>}
                                   <span>Cost: {formatCurrency(breakdown.totalCost)}</span>
                             </div>
+                                {rate.inactive_reason && rate.active === false && (
+                                  <div className="text-xs text-muted-foreground italic mt-1">
+                                    Reason: {rate.inactive_reason}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex gap-1 ml-2">
                               <Button 
@@ -897,6 +1014,9 @@ export function InventorySetup() {
                                       board_type: rate.board_type,
                                       occupancy_type: rate.occupancy_type,
                                       base_rate: rate.rate,
+                                      // Load active status
+                                      active: rate.active !== false,
+                                      inactive_reason: rate.inactive_reason || '',
                                       // Load validity dates from rate, fallback to contract
                                       valid_from: rate.valid_from || selectedContract?.start_date || '',
                                       valid_to: rate.valid_to || selectedContract?.end_date || '',
@@ -983,17 +1103,30 @@ export function InventorySetup() {
                   {/* Show buy-to-order rates for this hotel */}
                   {rates.filter(r => r.hotel_id === selectedHotelId && !r.contract_id).length > 0 ? (
                     <div className="space-y-2">
-                      <p className="text-sm font-medium">Buy-to-Order Rates</p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium">Buy-to-Order Rates</p>
+                        <Badge variant="default" className="text-xs">
+                          {rates.filter(r => r.hotel_id === selectedHotelId && !r.contract_id && r.active !== false).length} Active
+                        </Badge>
+                        {rates.filter(r => r.hotel_id === selectedHotelId && !r.contract_id && r.active === false).length > 0 && (
+                          <Badge variant="secondary" className="text-xs">
+                            {rates.filter(r => r.hotel_id === selectedHotelId && !r.contract_id && r.active === false).length} Inactive
+                          </Badge>
+                        )}
+                      </div>
                       {rates
                         .filter(r => r.hotel_id === selectedHotelId && !r.contract_id)
                         .map((rate) => (
                           <div
                             key={rate.id}
-                            className="p-2 rounded border hover:bg-accent transition-colors"
+                            className={cn(
+                              "p-2 rounded border hover:bg-accent transition-colors",
+                              rate.active === false && "opacity-50 bg-muted/50"
+                            )}
                           >
                             <div className="flex items-center justify-between">
                               <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-1">
+                                <div className="flex items-center gap-2 mb-1 flex-wrap">
                                   <span className="font-medium text-sm">{rate.roomName}</span>
                                   <Badge variant="secondary" className="text-xs">
                                     {rate.occupancy_type === 'single' ? '1p' : rate.occupancy_type === 'double' ? '2p' : rate.occupancy_type === 'triple' ? '3p' : '4p'}
@@ -1004,6 +1137,17 @@ export function InventorySetup() {
                                   <Badge variant="default" className="text-xs">
                                     Buy-to-Order
                                   </Badge>
+                                  <Badge 
+                                    variant={rate.active !== false ? "default" : "secondary"}
+                                    className="text-xs shrink-0 cursor-pointer hover:opacity-80"
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      updateRate(rate.id, { active: !rate.active })
+                                      toast.success(rate.active === false ? 'Rate activated' : 'Rate deactivated')
+                                    }}
+                                  >
+                                    {rate.active !== false ? '✓ Active' : 'Inactive'}
+                                  </Badge>
                                 </div>
                                 <div className="flex items-center gap-3 text-xs text-muted-foreground">
                                   <span className="font-medium text-primary">
@@ -1012,6 +1156,11 @@ export function InventorySetup() {
                                   {rate.board_cost && <span>+Board: {formatCurrency(rate.board_cost)}</span>}
                                   {rate.markup_percentage && <span>Markup: {(rate.markup_percentage * 100).toFixed(0)}%</span>}
                                 </div>
+                                {rate.inactive_reason && rate.active === false && (
+                                  <div className="text-xs text-muted-foreground italic mt-1">
+                                    Reason: {rate.inactive_reason}
+                                  </div>
+                                )}
                               </div>
                               <div className="flex gap-1 ml-2">
                                 <Button 
@@ -1025,6 +1174,9 @@ export function InventorySetup() {
                                       board_type: rate.board_type,
                                       occupancy_type: rate.occupancy_type,
                                       base_rate: rate.rate,
+                                      // Load active status
+                                      active: rate.active !== false,
+                                      inactive_reason: rate.inactive_reason || '',
                                       // Load validity dates from rate (buy-to-order rates should have these)
                                       valid_from: rate.valid_from || '',
                                       valid_to: rate.valid_to || '',
@@ -1167,6 +1319,42 @@ export function InventorySetup() {
                     )}
                   </SelectContent>
                 </Select>
+              </div>
+
+              {/* Active Status */}
+              <div className="border-t pt-4 space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    id="rate-active"
+                    checked={rateForm.active}
+                    onCheckedChange={(checked) => setRateForm({ ...rateForm, active: !!checked })}
+                  />
+                  <div className="grid gap-1.5 leading-none">
+                    <label
+                      htmlFor="rate-active"
+                      className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70 cursor-pointer"
+                    >
+                      Active (available for booking)
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      {rateForm.active 
+                        ? '✓ This rate will appear in booking searches' 
+                        : '⚠️ This rate will be hidden from bookings (inactive)'}
+                    </p>
+                  </div>
+                </div>
+
+                {!rateForm.active && (
+                  <div className="grid gap-2 ml-6">
+                    <Label className="text-xs">Reason for Deactivation (Optional)</Label>
+                    <Input
+                      value={rateForm.inactive_reason}
+                      onChange={(e) => setRateForm({ ...rateForm, inactive_reason: e.target.value })}
+                      placeholder="e.g., Seasonal closure, Maintenance, Overbooked"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Validity Dates */}
@@ -1644,6 +1832,9 @@ export function InventorySetup() {
                   occupancy_type: rateForm.occupancy_type,
                   board_type: rateForm.board_type,
                   rate: rateForm.base_rate,
+                  // Status
+                  active: rateForm.active,
+                  inactive_reason: rateForm.active ? undefined : rateForm.inactive_reason,
                   // Validity dates
                   valid_from: rateForm.valid_from || undefined,
                   valid_to: rateForm.valid_to || undefined,
@@ -1773,6 +1964,7 @@ export function InventorySetup() {
             formData={contractForm}
             setFormData={setContractForm}
             hotels={hotels}
+            suppliers={suppliers}
             tours={tours}
             selectedHotel={hotels.find(h => h.id === contractForm.hotel_id)}
             boardTypeInput={boardTypeInput}
