@@ -100,6 +100,7 @@ export interface RoomAllocation {
   occupancy_rates?: OccupancyRate[] // Optional: specific occupancy rates for this allocation (overrides contract defaults)
   base_rate?: number // Optional: flat rate for this allocation (overrides contract base_rate for flat rate strategy)
   label?: string // Optional label for the allocation (e.g., "Run of House", "Suites")
+  allocation_pool_id?: string // Optional: ID linking multiple rates to the same physical room inventory
 }
 
 export interface OccupancyRate {
@@ -349,7 +350,6 @@ export interface Contract {
   
   // MARKUP SETTINGS
   markup_percentage?: number // Default markup for regular nights (e.g., 0.60 = 60%)
-  shoulder_markup_percentage?: number // Markup for shoulder nights (e.g., 0.30 = 30%)
   
   // Stay restrictions
   days_of_week?: {
@@ -371,9 +371,7 @@ export interface Contract {
   supplier_commission_rate?: number // What hotel/supplier charges you (percentage)
   // Board/Meal plan options
   board_options?: BoardOption[] // Available board types and their costs
-  // Shoulder night rates
-  pre_shoulder_rates?: number[] // [day-1, day-2, day-3...] Index 0 = night before start_date
-  post_shoulder_rates?: number[] // [day+1, day+2, day+3...] Index 0 = night after end_date
+  // Shoulder nights are now handled as separate rates with is_shoulder flag
   // Attrition (room reduction stages)
   attrition_stages?: AttritionStage[] // Dates when rooms can be released with penalties
   // Cancellation (full cancellation penalties)
@@ -387,35 +385,45 @@ export interface Contract {
 export type OccupancyType = 'single' | 'double' | 'triple' | 'quad'
 export type BoardType = 'room_only' | 'bed_breakfast' | 'half_board' | 'full_board' | 'all_inclusive'
 
+export type ShoulderType = 'none' | 'pre' | 'post'
+
 export interface Rate {
   id: number
   contract_id?: number // Optional for buy-to-order rates
   contractName?: string
   hotel_id?: number // For buy-to-order rates without contract
   hotelName?: string
+  tour_id?: number // Optional: link rate to specific tour (for buy-to-order or contract rates)
+  tourName?: string // Auto-populated from tour
   room_group_id: string // References hotel.room_groups[].id
   roomName: string
   occupancy_type: OccupancyType // Single, Double, Triple, or Quad
   board_type: BoardType // Meal plan included
   
+  // ALLOCATION POOL (for multi-rate periods)
+  allocation_pool_id?: string // Links multiple rates to the same physical room inventory
+  
   // RATE STRUCTURE
   rate: number // Base room rate for this occupancy
   board_cost?: number // Board cost (per person per night for contract, total for buy-to-order)
+  
+  // SHOULDER NIGHT SUPPORT (NEW: Separate rate approach)
+  is_shoulder?: boolean // Flag indicating this is a shoulder rate
+  shoulder_type?: ShoulderType // Type of shoulder rate (pre/post/none)
+  linked_main_rate_id?: number // Optional: link to the main rate this shoulders
   
   // STATUS
   active?: boolean // Whether this rate is available for booking (default: true)
   inactive_reason?: string // Optional reason for inactivity
   
   // VALIDITY & RESTRICTIONS
-  valid_from?: string // Validity start date (required for buy-to-order)
-  valid_to?: string // Validity end date (required for buy-to-order)
+  valid_from?: string // Validity start date (required for buy-to-order and shoulder rates)
+  valid_to?: string // Validity end date (required for buy-to-order and shoulder rates)
   min_nights?: number // Minimum nights (overrides contract, required for buy-to-order)
   max_nights?: number // Maximum nights (overrides contract, required for buy-to-order)
   estimated_costs?: boolean // Flag to indicate this is an estimated rate
   
-  // SHOULDER NIGHT RATES (per occupancy)
-  pre_shoulder_rates?: number[] // Rates for nights before validity period [day-1, day-2, ...]
-  post_shoulder_rates?: number[] // Rates for nights after validity period [day+1, day+2, ...]
+  // Shoulder nights are now handled as separate rates with is_shoulder flag
   
   // RATE-LEVEL COSTS (per room per night, unless specified)
   // For contract rates: optional overrides
@@ -427,7 +435,6 @@ export interface Rate {
   
   // MARKUP SETTINGS
   markup_percentage?: number // Default markup for regular nights (e.g., 0.60 = 60%)
-  shoulder_markup_percentage?: number // Markup for shoulder nights (e.g., 0.30 = 30%)
   
   // Other
   currency?: string
@@ -2168,16 +2175,19 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const category = inventoryType?.service_categories.find(sc => sc.id === rate.category_id)
     const tour = rate.tour_id ? tours.find(t => t.id === rate.tour_id) : (contract?.tour_id ? tours.find(t => t.id === contract.tour_id) : null)
     
-    const newRate: ServiceRate = {
-      ...rate,
-      id: Math.max(...serviceRates.map(sr => sr.id), 0) + 1,
-      contractName: contract?.contract_name || '',
-      inventoryTypeName: inventoryType?.name || '',
-      categoryName: category?.category_name || '',
-      tourName: tour?.name || undefined,
-      selling_price: rate.base_rate * (1 + rate.markup_percentage)
-    }
-    setServiceRates([...serviceRates, newRate])
+    setServiceRates(prevRates => {
+      const newRate: ServiceRate = {
+        ...rate,
+        id: Math.max(...prevRates.map(sr => sr.id), 0) + 1,
+        contractName: contract?.contract_name || '',
+        inventoryTypeName: inventoryType?.name || '',
+        categoryName: category?.category_name || '',
+        tourName: tour?.name || undefined,
+        selling_price: rate.base_rate * (1 + rate.markup_percentage)
+      }
+      
+      return [...prevRates, newRate]
+    })
   }
 
   const updateServiceRate = (id: number, rate: Partial<ServiceRate>) => {
@@ -2314,11 +2324,12 @@ export function DataProvider({ children }: { children: ReactNode }) {
               roomName: roomGroup.room_type,
               occupancy_type: occupancy,
               board_type: boardOption.board_type,
+              allocation_pool_id: allocation.allocation_pool_id, // Link to shared pool if specified
               rate: occupancyRate, // Base room rate for this occupancy (now uses allocation override if set)
               board_cost: boardOption.additional_cost, // Per person per night
               board_included: true, // Board from contract
               markup_percentage: contract.markup_percentage || 0.60,
-              shoulder_markup_percentage: contract.shoulder_markup_percentage || 0.30,
+              // shoulder_markup_percentage removed - shoulder rates are now separate
               currency: contract.currency,
               active: true, // Default to active
             }
@@ -2346,8 +2357,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   // No separate room CRUD needed
 
   // Rate CRUD
-  const addRate = (rate: Omit<Rate, 'id' | 'contractName' | 'roomName'>) => {
+  const addRate = (rate: Omit<Rate, 'id' | 'contractName' | 'roomName' | 'tourName'>) => {
     const contract = contracts.find(c => c.id === rate.contract_id)
+    const tour = tours.find(t => t.id === rate.tour_id)
     // For buy-to-order rates, get hotel directly; for contract rates, get via contract
     const hotel = hotels.find(h => h.id === (rate.hotel_id || contract?.hotel_id))
     const roomGroup = hotel?.room_groups.find(rg => rg.id === rate.room_group_id)
@@ -2358,6 +2370,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       contractName: contract?.contract_name || '',
       roomName: roomGroup?.room_type || '',
       hotelName: hotel?.name || '', // Add hotelName for buy-to-order rates
+      tourName: tour?.name || '', // Add tourName
       // Inherit from contract if not specified
       currency: rate.currency || contract?.currency,
       tax_rate: rate.tax_rate !== undefined ? rate.tax_rate : contract?.tax_rate,
@@ -2370,6 +2383,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     setRates(rates.map(r => {
       if (r.id === id) {
         const contract = contracts.find(c => c.id === (rate.contract_id || r.contract_id))
+        const tour = tours.find(t => t.id === (rate.tour_id || r.tour_id))
         // For buy-to-order rates, get hotel directly; for contract rates, get via contract
         const hotel = hotels.find(h => h.id === (rate.hotel_id || r.hotel_id || contract?.hotel_id))
         const roomGroup = hotel?.room_groups.find(rg => rg.id === (rate.room_group_id || r.room_group_id))
@@ -2380,6 +2394,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
           contractName: contract?.contract_name || r.contractName,
           roomName: roomGroup?.room_type || r.roomName,
           hotelName: hotel?.name || r.hotelName || '', // Add hotelName for buy-to-order rates
+          tourName: tour?.name || r.tourName || '', // Add tourName
         }
       }
       return r

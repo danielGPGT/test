@@ -6,9 +6,9 @@ import { Toaster } from '@/components/ui/sonner'
 import { Dashboard } from '@/pages/dashboard'
 import { Tours } from '@/pages/tours'
 
-import { InventorySetup } from '@/pages/inventory-setup'
-import { ServiceInventoryNew } from '@/pages/service-inventory'
+import { InventoryManagement } from '@/pages/inventory-management'
 import { ServiceProviders } from '@/pages/service-providers'
+import { Hotels } from '@/pages/hotels'
 import { Operations } from '@/pages/operations'
 import { Bookings } from '@/pages/bookings'
 
@@ -28,9 +28,9 @@ function App() {
               <Route index element={<Dashboard />} />
               <Route path="tours" element={<Tours />} />
 
-              <Route path="inventory" element={<InventorySetup />} />
-              <Route path="service-inventory" element={<ServiceInventoryNew />} />
+              <Route path="inventory" element={<InventoryManagement />} />
               <Route path="service-providers" element={<ServiceProviders />} />
+              <Route path="hotels" element={<Hotels />} />
               <Route path="operations" element={<Operations />} />
               <Route path="suppliers" element={<Suppliers />} />
               <Route path="payments" element={<Payments />} />

@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo } from 'react'
 import { useData } from '@/contexts/data-context'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -37,25 +37,15 @@ import {
   Package,
   Calendar,
   Copy,
+  Building,
   TrendingUp,
   CheckCircle2,
-  XCircle,
-  Pencil,
-  Download,
-  Upload,
-  X,
-  ChevronLeft,
-  ChevronRight,
-  Filter
+  XCircle
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { formatCurrency } from '@/lib/utils'
 
-interface ServiceInventoryNewProps {
-  selectedTypeId?: number
-}
-
-export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: ServiceInventoryNewProps = {}) {
+export function ServiceInventoryNew() {
   const {
     serviceInventoryTypes,
     serviceContracts,
@@ -70,7 +60,7 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
     deleteServiceRate
   } = useData()
 
-  const [selectedTypeId, setSelectedTypeId] = useState<number | null>(initialSelectedTypeId || null)
+  const [selectedTypeId, setSelectedTypeId] = useState<number | null>(null)
   const [isContractDialogOpen, setIsContractDialogOpen] = useState(false)
   const [editingContract, setEditingContract] = useState<any | null>(null)
   const [isRateDialogOpen, setIsRateDialogOpen] = useState(false)
@@ -79,7 +69,7 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
   // Filters
   const [filterSupplier, setFilterSupplier] = useState<string>('all')
   const [filterTour, setFilterTour] = useState<string>('all')
-  const [filterInventoryType, setFilterInventoryType] = useState<string>('all')
+  const [filterInventoryType, setFilterInventoryType] = useState<string>('contract')
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
   
@@ -93,23 +83,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
       [typeId]: { ...getRateFilter(typeId), ...filter }
     }))
   }
-
-  // Enterprise Features State
-  const [currentPage, setCurrentPage] = useState(1)
-  const [itemsPerPage] = useState(50)
-  const [selectedItems, setSelectedItems] = useState<Set<number>>(new Set())
-  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
-  const [advancedFilters, setAdvancedFilters] = useState({
-    dateFrom: '',
-    dateTo: '',
-    priceMin: '',
-    priceMax: '',
-    suppliers: [] as number[],
-    tours: [] as number[],
-    statuses: [] as string[]
-  })
-  const [bulkAction, setBulkAction] = useState<string>('')
-  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false)
 
   const [contractForm, setContractForm] = useState({
     supplier_id: 0,
@@ -127,15 +100,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
     payment_schedule: [] as any[],
     cancellation_policy: '',
     notes: '',
-    days_of_week: {
-      monday: false,
-      tuesday: false,
-      wednesday: false,
-      thursday: false,
-      friday: true,
-      saturday: true,
-      sunday: true
-    },
     active: true
   })
 
@@ -212,15 +176,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
         payment_schedule: contract.payment_schedule || [],
         cancellation_policy: contract.cancellation_policy || '',
         notes: contract.notes || '',
-        days_of_week: contract.days_of_week || {
-          monday: false,
-          tuesday: false,
-          wednesday: false,
-          thursday: false,
-          friday: true,
-          saturday: true,
-          sunday: true
-        },
         active: contract.active
       })
     } else {
@@ -241,15 +196,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
         payment_schedule: [],
         cancellation_policy: '',
         notes: '',
-        days_of_week: {
-          monday: false,
-          tuesday: false,
-          wednesday: false,
-          thursday: false,
-          friday: true,
-          saturday: true,
-          sunday: true
-        },
         active: true
       })
     }
@@ -299,15 +245,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
       payment_schedule: [], // Reset payment schedule
       cancellation_policy: contract.cancellation_policy || '',
       notes: `Cloned from: ${contract.contract_name}. Please update dates and payment details.`,
-      days_of_week: contract.days_of_week || {
-        monday: false,
-        tuesday: false,
-        wednesday: false,
-        thursday: false,
-        friday: true,
-        saturday: true,
-        sunday: true
-      },
       active: true
     })
     setIsContractDialogOpen(true)
@@ -439,125 +376,15 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
     }
   }
 
-  const handleGenerateRatesFromContract = (contract: any) => {
-    if (!contract.service_allocations || contract.service_allocations.length === 0) {
-      toast.error('Contract has no service allocations to generate rates from')
-      return
-    }
-
-
-    const confirmed = confirm(
-      `Generate rates from ${contract.service_allocations.length} allocation(s) in "${contract.contract_name}"?\n\n` +
-      `This will create rates with ${(contract.markup_percentage * 100).toFixed(0)}% markup.`
-    )
-
-    if (!confirmed) return
-
-    try {
-      let generatedCount = 0
-      let skippedCount = 0
-
-      for (let index = 0; index < contract.service_allocations.length; index++) {
-        const allocation = contract.service_allocations[index]
-        
-        // Find the service category for this allocation
-        const inventoryType = serviceInventoryTypes.find(type => type.id === contract.inventory_type_id)
-        const categoryId = allocation.category_ids?.[0] // Get the first category ID
-        
-        
-        if (!inventoryType) {
-          console.error('Inventory type not found:', contract.inventory_type_id)
-          toast.error(`Inventory type ${contract.inventory_type_id} not found`)
-          return
-        }
-        
-        let category = inventoryType?.service_categories?.find((cat: any) => 
-          cat.id === categoryId
-        )
-
-        if (!category) {
-          console.warn(`Could not find category for allocation:`, allocation)
-          
-          // Try to find the category across all inventory types as fallback
-          console.log('Trying fallback search across all inventory types...')
-          
-          for (const invType of serviceInventoryTypes) {
-            const foundCategory = invType.service_categories?.find((cat: any) => cat.id === categoryId)
-            if (foundCategory) {
-              console.log('Found category in fallback search:', {
-                category: foundCategory,
-                inventoryType: invType.name,
-                inventoryTypeId: invType.id
-              })
-              category = foundCategory
-              break
-            }
-          }
-          
-          if (!category) {
-            console.error(`Could not find category "${categoryId}" for allocation "${allocation.label}"`)
-            skippedCount++
-            continue // Skip this allocation but continue with others
-          }
-        }
-
-        // Create rate based on allocation
-        const newRate = {
-          contract_id: contract.id,
-          inventory_type_id: contract.inventory_type_id,
-          category_id: category.id,
-          tour_id: contract.tour_id, // Inherit tour_id from contract
-          base_rate: allocation.base_rate,
-          pricing_unit: category.pricing_unit || 'per_person' as const,
-          markup_percentage: contract.markup_percentage,
-          // selling_price: calculated by addServiceRate function
-          currency: 'USD',
-          inventory_type: 'contract' as const,
-          allocated_quantity: allocation.quantity,
-          available_quantity: allocation.quantity,
-          valid_from: contract.valid_from,
-          valid_to: contract.valid_to,
-          days_of_week: contract.days_of_week || {
-            monday: false,
-            tuesday: false,
-            wednesday: false,
-            thursday: false,
-            friday: true,
-            saturday: true,
-            sunday: true
-          },
-          active: true
-        }
-
-        try {
-          addServiceRate(newRate)
-          generatedCount++
-        } catch (error) {
-          console.error(`Error creating rate for allocation "${allocation.label}":`, error)
-          skippedCount++
-        }
-      }
-
-      if (generatedCount > 0) {
-        toast.success(`Generated ${generatedCount} rates from contract allocations${skippedCount > 0 ? ` (${skippedCount} skipped due to missing categories)` : ''}`)
-        
-      } else {
-        toast.error(`No rates generated. ${skippedCount} allocations skipped due to missing categories.`)
-      }
-    } catch (error) {
-      console.error('Error generating rates:', error)
-      toast.error('Failed to generate rates from contract')
-    }
+  const handleToggleRateStatus = (rate: any) => {
+    updateServiceRate(rate.id, { active: !rate.active })
+    toast.success(rate.active ? 'Rate deactivated' : 'Rate activated')
   }
-
 
   // Filter rates based on filters
   const filteredServiceRates = useMemo(() => {
     return serviceRates.filter(rate => {
       const contract = serviceContracts.find(c => c.id === rate.contract_id)
-      
-      // If selectedTypeId is set (from tab), filter by that inventory type
-      const matchesSelectedType = !selectedTypeId || rate.inventory_type_id === selectedTypeId
       
       const matchesSupplier = filterSupplier === 'all' || 
         (contract && contract.supplier_id.toString() === filterSupplier)
@@ -573,16 +400,13 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
         rate.inventoryTypeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
         rate.contractName?.toLowerCase().includes(searchTerm.toLowerCase())
       
-      return matchesSelectedType && matchesSupplier && matchesTour && matchesInventoryType && matchesStatus && matchesSearch
+      return matchesSupplier && matchesTour && matchesInventoryType && matchesStatus && matchesSearch
     })
-  }, [serviceRates, serviceContracts, selectedTypeId, filterSupplier, filterTour, filterInventoryType, filterStatus, searchTerm])
+  }, [serviceRates, serviceContracts, filterSupplier, filterTour, filterInventoryType, filterStatus, searchTerm])
 
   // Filter contracts
   const filteredServiceContracts = useMemo(() => {
     return serviceContracts.filter(contract => {
-      // If selectedTypeId is set (from tab), filter by that inventory type
-      const matchesSelectedType = !selectedTypeId || contract.inventory_type_id === selectedTypeId
-      
       const matchesSupplier = filterSupplier === 'all' || contract.supplier_id.toString() === filterSupplier
       const matchesTour = filterTour === 'all' || contract.tour_id?.toString() === filterTour
       const matchesStatus = filterStatus === 'all' || 
@@ -592,134 +416,19 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
         contract.contract_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         contract.inventoryTypeName.toLowerCase().includes(searchTerm.toLowerCase())
       
-      return matchesSelectedType && matchesSupplier && matchesTour && matchesStatus && matchesSearch
+      return matchesSupplier && matchesTour && matchesStatus && matchesSearch
     })
-  }, [serviceContracts, selectedTypeId, filterSupplier, filterTour, filterStatus, searchTerm])
-
-  // Enterprise Functions
-  const handleSelectAll = useCallback(() => {
-    if (selectedItems.size === filteredServiceContracts.length) {
-      setSelectedItems(new Set())
-    } else {
-      setSelectedItems(new Set(filteredServiceContracts.map(c => c.id)))
-    }
-  }, [selectedItems.size, filteredServiceContracts])
-
-  // const handleSelectItem = useCallback((id: number) => {
-  //   setSelectedItems(prev => {
-  //     const newSet = new Set(prev)
-  //     if (newSet.has(id)) {
-  //       newSet.delete(id)
-  //     } else {
-  //       newSet.add(id)
-  //     }
-  //     return newSet
-  //   })
-  // }, [])
-
-  const handleBulkAction = useCallback(async (action: string) => {
-    if (selectedItems.size === 0) {
-      toast.error('Please select items to perform bulk action')
-      return
-    }
-
-    switch (action) {
-      case 'delete':
-        if (confirm(`Delete ${selectedItems.size} contracts? This action cannot be undone.`)) {
-          selectedItems.forEach(id => deleteServiceContract(id))
-          setSelectedItems(new Set())
-          toast.success(`Deleted ${selectedItems.size} contracts`)
-        }
-        break
-      case 'activate':
-        selectedItems.forEach(id => {
-          const contract = serviceContracts.find(c => c.id === id)
-          if (contract) updateServiceContract(id, { active: true })
-        })
-        setSelectedItems(new Set())
-        toast.success(`Activated ${selectedItems.size} contracts`)
-        break
-      case 'deactivate':
-        selectedItems.forEach(id => {
-          const contract = serviceContracts.find(c => c.id === id)
-          if (contract) updateServiceContract(id, { active: false })
-        })
-        setSelectedItems(new Set())
-        toast.success(`Deactivated ${selectedItems.size} contracts`)
-        break
-    }
-  }, [selectedItems, deleteServiceContract, updateServiceContract, serviceContracts])
-
-  const handleExport = useCallback(() => {
-    const dataToExport = filteredServiceContracts.map(contract => ({
-      'Contract Name': contract.contract_name,
-      'Supplier': contract.supplierName,
-      'Inventory Type': contract.inventoryTypeName,
-      'Tour': contract.tourName || 'Generic',
-      'Valid From': contract.valid_from,
-      'Valid To': contract.valid_to,
-      'Status': contract.active ? 'Active' : 'Inactive',
-      'Allocations': contract.service_allocations.length,
-      'Markup %': (contract.markup_percentage * 100).toFixed(1)
-    }))
-
-    const csvContent = [
-      Object.keys(dataToExport[0]).join(','),
-      ...dataToExport.map(row => Object.values(row).join(','))
-    ].join('\n')
-
-    const blob = new Blob([csvContent], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `service-contracts-${new Date().toISOString().split('T')[0]}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-    
-    toast.success(`Exported ${dataToExport.length} contracts`)
-  }, [filteredServiceContracts])
-
-  const handleImport = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0]
-    if (!file) return
-
-    const reader = new FileReader()
-    reader.onload = (_e) => {
-      try {
-        // const csv = e.target?.result as string
-        // const lines = csv.split('\n')
-        // const headers = lines[0].split(',')
-        
-        // Basic CSV parsing - in real implementation, use a proper CSV parser
-        toast.info('Import functionality would be implemented with proper CSV parsing')
-        setIsImportDialogOpen(false)
-      } catch (error) {
-        toast.error('Error parsing CSV file')
-      }
-    }
-    reader.readAsText(file)
-  }, [])
-
-  // Pagination
-  // const paginatedContracts = useMemo(() => {
-  //   const startIndex = (currentPage - 1) * itemsPerPage
-  //   const endIndex = startIndex + itemsPerPage
-  //   return filteredServiceContracts.slice(startIndex, endIndex)
-  // }, [filteredServiceContracts, currentPage, itemsPerPage])
-
-  const totalPages = Math.ceil(filteredServiceContracts.length / itemsPerPage)
+  }, [serviceContracts, filterSupplier, filterTour, filterStatus, searchTerm])
 
   return (
     <div className="space-y-6">
-      {/* Header - Hidden when pre-filtered by tab (shown in parent) */}
-      {!initialSelectedTypeId && (
-        <div>
-          <h1 className="text-3xl font-bold">Service Inventory</h1>
-          <p className="text-muted-foreground mt-1">
-            Manage service contracts, rates, and availability
-          </p>
-        </div>
-      )}
+      {/* Header */}
+      <div>
+        <h1 className="text-3xl font-bold">Service Inventory</h1>
+        <p className="text-muted-foreground mt-1">
+          Manage service contracts, rates, and availability
+        </p>
+      </div>
 
       {/* Stats */}
       <div className="grid grid-cols-6 gap-4">
@@ -777,28 +486,25 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                 </Select>
               </div>
 
-              {/* Only show Inventory Type selector if not pre-filtered by tab */}
-              {!initialSelectedTypeId && (
-                <div className="grid gap-2">
-                  <Label>Inventory Type</Label>
-                  <Select
-                    value={selectedTypeId?.toString() || 'all'}
-                    onValueChange={(value) => setSelectedTypeId(value === 'all' ? null : parseInt(value))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All Inventory Types</SelectItem>
-                      {serviceInventoryTypes.map(type => (
-                        <SelectItem key={type.id} value={type.id.toString()}>
-                          {type.name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              )}
+              <div className="grid gap-2">
+                <Label>Inventory Type</Label>
+                <Select
+                  value={selectedTypeId?.toString() || 'all'}
+                  onValueChange={(value) => setSelectedTypeId(value === 'all' ? null : parseInt(value))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All Inventory Types</SelectItem>
+                    {serviceInventoryTypes.map(type => (
+                      <SelectItem key={type.id} value={type.id.toString()}>
+                        {type.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
               <div className="grid gap-2">
                 <Label>Supplier</Label>
@@ -878,7 +584,7 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                       setSelectedTypeId(null)
                       setFilterTour('all')
                       setFilterSupplier('all')
-                      setFilterInventoryType('all')
+                      setFilterInventoryType('contract')
                       setFilterStatus('all')
                       setSearchTerm('')
                     }}
@@ -886,140 +592,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                     Clear Filters
                   </Button>
                 </div>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Enterprise Controls */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <Checkbox
-                  checked={selectedItems.size > 0 && selectedItems.size === filteredServiceContracts.length}
-                  onCheckedChange={handleSelectAll}
-                />
-                <span className="text-sm font-medium">
-                  {selectedItems.size > 0 ? `${selectedItems.size} selected` : 'Select All'}
-                </span>
-              </div>
-              
-              {selectedItems.size > 0 && (
-                <div className="flex items-center gap-2">
-                  <Select value={bulkAction} onValueChange={setBulkAction}>
-                    <SelectTrigger className="w-32">
-                      <SelectValue placeholder="Actions" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="activate">Activate</SelectItem>
-                      <SelectItem value="deactivate">Deactivate</SelectItem>
-                      <SelectItem value="delete">Delete</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button size="sm" onClick={() => handleBulkAction(bulkAction)}>
-                    Apply
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setSelectedItems(new Set())}>
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
-              >
-                <Filter className="h-4 w-4 mr-1" />
-                Advanced Filters
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleExport}>
-                <Download className="h-4 w-4 mr-1" />
-                Export CSV
-              </Button>
-              <Button size="sm" variant="outline" onClick={() => setIsImportDialogOpen(true)}>
-                <Upload className="h-4 w-4 mr-1" />
-                Import CSV
-              </Button>
-            </div>
-          </div>
-
-          {/* Advanced Filters */}
-          {showAdvancedFilters && (
-            <div className="border-t pt-4 space-y-4">
-              <div className="grid grid-cols-4 gap-4">
-                <div className="grid gap-2">
-                  <Label>Date From</Label>
-                  <Input
-                    type="date"
-                    value={advancedFilters.dateFrom}
-                    onChange={(e) => setAdvancedFilters(prev => ({ ...prev, dateFrom: e.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Date To</Label>
-                  <Input
-                    type="date"
-                    value={advancedFilters.dateTo}
-                    onChange={(e) => setAdvancedFilters(prev => ({ ...prev, dateTo: e.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Min Price</Label>
-                  <Input
-                    type="number"
-                    placeholder="0.00"
-                    value={advancedFilters.priceMin}
-                    onChange={(e) => setAdvancedFilters(prev => ({ ...prev, priceMin: e.target.value }))}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label>Max Price</Label>
-                  <Input
-                    type="number"
-                    placeholder="9999.99"
-                    value={advancedFilters.priceMax}
-                    onChange={(e) => setAdvancedFilters(prev => ({ ...prev, priceMax: e.target.value }))}
-                  />
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Results Summary */}
-          <div className="flex items-center justify-between mt-4 pt-4 border-t">
-            <div className="text-sm text-muted-foreground">
-              Showing {filteredServiceContracts.length} contracts
-              {totalPages > 1 && (
-                <span> • Page {currentPage} of {totalPages}</span>
-              )}
-            </div>
-            {totalPages > 1 && (
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <span className="text-sm">
-                  {currentPage} / {totalPages}
-                </span>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
               </div>
             )}
           </div>
@@ -1034,323 +606,7 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
           </CardContent>
         </Card>
       ) : (
-        <Accordion type="multiple" defaultValue={[]} className="space-y-2">
-          {/* Generic Contracts Section (No Tour Linked) - Always shown first */}
-          {(() => {
-            const genericContracts = filteredServiceContracts.filter(c => !c.tour_id)
-            const genericRates = filteredServiceRates.filter(r => !r.tour_id)
-
-            return (
-              <AccordionItem
-                value="generic"
-                className="border-2 rounded-lg bg-card"
-                style={{ borderColor: 'hsl(var(--muted-foreground) / 0.2)' }}
-              >
-                <AccordionTrigger className="px-4 hover:no-underline">
-                  <div className="flex items-center justify-between w-full pr-4">
-                    <div className="flex items-center gap-3">
-                      <Package className="h-5 w-5 text-muted-foreground" />
-                      <div className="text-left">
-                        <div className="font-bold text-base">Generic Services (No Tour)</div>
-                        <div className="text-sm text-muted-foreground flex items-center gap-2">
-                          <span>Reusable across all tours</span>
-                          <span>•</span>
-                          <span>{genericContracts.length} {genericContracts.length === 1 ? 'contract' : 'contracts'}</span>
-                          <span>•</span>
-                          <span>{genericRates.length} {genericRates.length === 1 ? 'rate' : 'rates'}</span>
-                        </div>
-                      </div>
-                    </div>
-                    <Badge variant="outline">Generic</Badge>
-                  </div>
-                </AccordionTrigger>
-
-                <AccordionContent className="px-4 pb-4">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="text-sm text-muted-foreground">
-                      These contracts and rates are not linked to any specific tour and can be used across all events.
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleOpenContractDialog()}
-                      >
-                        <Plus className="h-4 w-4 mr-1" />
-                        New Generic Contract
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleOpenRateDialog()}
-                      >
-                        <Plus className="h-4 w-4 mr-1" />
-                        New Generic Rate
-                      </Button>
-                    </div>
-                  </div>
-                  
-                  {/* Generic Contracts */}
-                  {genericContracts.length > 0 && (
-                    <div className="space-y-3 mb-6">
-                      <h4 className="font-semibold text-sm flex items-center gap-2">
-                        <FileText className="h-4 w-4" />
-                        Generic Contracts ({genericContracts.length})
-                      </h4>
-                      <div className="space-y-2">
-                        {genericContracts.map((contract: any) => (
-                          <div key={contract.id} className="p-3 border rounded-lg">
-                            <div className="flex items-center justify-between">
-                              <div>
-                                <div className="font-medium">{contract.contract_name}</div>
-                                <div className="text-sm text-muted-foreground">
-                                  {contract.supplierName} • {contract.service_allocations?.length || 0} allocations
-                                </div>
-                              </div>
-                              <div className="flex gap-2">
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleOpenContractDialog(undefined, contract)}
-                                >
-                                  Edit
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => handleGenerateRatesFromContract(contract)}
-                                >
-                                  Generate Rates
-                                </Button>
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Generic Rates */}
-                  {genericRates.length > 0 ? (
-                    <div className="space-y-3">
-                      <h4 className="font-semibold text-sm flex items-center gap-2">
-                        <DollarSign className="h-4 w-4" style={{ color: 'hsl(var(--primary))' }} />
-                        Generic Rates ({genericRates.length})
-                      </h4>
-                      
-                      <Card>
-                        <CardContent className="p-0">
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
-                              <thead style={{ backgroundColor: 'hsl(var(--muted) / 0.5)' }}>
-                                <tr>
-                                  <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Category</th>
-                                  <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Source</th>
-                                  <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Valid Period</th>
-                                  <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Days</th>
-                                  <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Cost</th>
-                                  <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Sell</th>
-                                  <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Margin</th>
-                                  <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Available</th>
-                                  <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Status</th>
-                                  <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Actions</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {genericRates.map((rate: any, idx: number) => {
-                                  const margin = rate.selling_price - rate.base_rate
-                                  const marginPercent = (margin / rate.base_rate) * 100
-                                  const contract = serviceContracts.find(c => c.id === rate.contract_id)
-                                  
-                                  // Format days of week
-                                  const formatDaysOfWeek = (days: any) => {
-                                    try {
-                                      if (!days) return 'All days'
-                                      
-                                      if (typeof days === 'object' && !Array.isArray(days)) {
-                                        const dayMap: Record<string, string> = {
-                                          'monday': 'Mon', 'tuesday': 'Tue', 'wednesday': 'Wed',
-                                          'thursday': 'Thu', 'friday': 'Fri', 'saturday': 'Sat', 'sunday': 'Sun'
-                                        }
-                                        const activeDays = Object.entries(days)
-                                          .filter(([, isActive]) => isActive === true)
-                                          .map(([day]) => dayMap[day] || day)
-                                          
-                                        return activeDays.length > 0 ? activeDays.join(', ') : 'No days set'
-                                      }
-                                      
-                                      if (Array.isArray(days)) {
-                                        if (days.length === 0) return 'All days'
-                                        const dayMap: Record<string, string> = {
-                                          'monday': 'Mon', 'tuesday': 'Tue', 'wednesday': 'Wed',
-                                          'thursday': 'Thu', 'friday': 'Fri', 'saturday': 'Sat', 'sunday': 'Sun'
-                                        }
-                                        return days.map(day => dayMap[day.toLowerCase()] || day).join(', ')
-                                      }
-                                      
-                                      return 'All days'
-                                    } catch (error) {
-                                      console.error('Error formatting days of week:', error, 'days:', days)
-                                      return 'Error'
-                                    }
-                                  }
-
-                                  return (
-                                    <tr
-                                      key={rate.id}
-                                      className={`${rate.active ? 'hover:bg-muted/30' : 'opacity-50'} transition-colors`}
-                                      style={{ borderTop: idx > 0 ? '1px solid hsl(var(--border))' : 'none' }}
-                                    >
-                                      <td className="p-3">
-                                        <div className="font-medium">{rate.categoryName}</div>
-                                        {rate.direction && (
-                                          <div className="text-xs text-muted-foreground mt-1">
-                                            {rate.direction.replace('_', ' ').toUpperCase()}
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td className="p-3">
-                                        {rate.inventory_type === 'buy_to_order' ? (
-                                          <Badge variant="secondary" className="text-xs">
-                                            Buy-to-Order
-                                          </Badge>
-                                        ) : (
-                                          <div>
-                                            <div className="font-medium text-xs">{contract?.contract_name || 'Unknown Contract'}</div>
-                                            <div className="text-xs text-muted-foreground">{contract?.supplierName || ''}</div>
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-center">
-                                        <div className="text-xs flex items-center justify-center gap-1">
-                                          <div className="font-medium">
-                                            {new Date(rate.valid_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                          </div>
-                                          <div className="text-muted-foreground">to</div>
-                                          <div className="font-medium">
-                                            {new Date(rate.valid_to).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                          </div>
-                                        </div>
-                                      </td>
-                                      <td className="p-3 text-center">
-                                        <div className="text-xs">
-                                          {formatDaysOfWeek(rate.days_of_week)}
-                                        </div>
-                                      </td>
-                                      <td className="p-3 text-right text-muted-foreground font-mono">
-                                        {formatCurrency(rate.base_rate)}
-                                      </td>
-                                      <td className="p-3 text-right font-bold font-mono" style={{ color: 'hsl(var(--primary))' }}>
-                                        {formatCurrency(rate.selling_price)}
-                                      </td>
-                                      <td className="p-3 text-right">
-                                        <div className="text-green-600 font-medium">
-                                          +{formatCurrency(margin)}
-                                        </div>
-                                        <div className="text-xs text-muted-foreground">
-                                          ({marginPercent.toFixed(0)}%)
-                                        </div>
-                                      </td>
-                                      <td className="p-3 text-center">
-                                        {rate.inventory_type === 'buy_to_order' ? (
-                                          <span className="text-xs text-muted-foreground">Unlimited</span>
-                                        ) : (
-                                          <div>
-                                            <div className="font-medium">
-                                              {rate.available_quantity || 0}
-                                            </div>
-                                            <div className="text-xs text-muted-foreground">
-                                              of {rate.allocated_quantity || 0}
-                                            </div>
-                                          </div>
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-center">
-                                        {rate.active ? (
-                                          <Badge className="text-xs bg-green-500 text-white">
-                                            <CheckCircle2 className="h-3 w-3 mr-1" />
-                                            Active
-                                          </Badge>
-                                        ) : (
-                                          <Badge variant="secondary" className="text-xs">
-                                            <XCircle className="h-3 w-3 mr-1" />
-                                            Inactive
-                                          </Badge>
-                                        )}
-                                      </td>
-                                      <td className="p-3 text-center">
-                                        <div className="flex justify-center gap-1">
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            onClick={() => handleOpenRateDialog(rate)}
-                                            title="Edit rate"
-                                          >
-                                            <Pencil className="h-3 w-3" />
-                                          </Button>
-                                          <Button
-                                            size="sm"
-                                            variant="ghost"
-                                            onClick={() => handleDeleteRate(rate)}
-                                            title="Delete rate"
-                                          >
-                                            <Trash2 className="h-3 w-3 text-destructive" />
-                                          </Button>
-                                        </div>
-                                      </td>
-                                    </tr>
-                                  )
-                                })}
-                              </tbody>
-                            </table>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  ) : genericContracts.length === 0 ? (
-                    <Card>
-                      <CardContent className="p-8">
-                        <div className="text-center space-y-4">
-                          <div className="mx-auto w-12 h-12 rounded-full flex items-center justify-center" style={{ backgroundColor: 'hsl(var(--muted))' }}>
-                            <Package className="h-6 w-6 text-muted-foreground" />
-                          </div>
-                          <div>
-                            <h3 className="font-semibold mb-1">No Generic Inventory Yet</h3>
-                            <p className="text-sm text-muted-foreground">
-                              Create contracts and rates that can be used across all tours
-                            </p>
-                          </div>
-                          <div className="flex gap-2 justify-center pt-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleOpenContractDialog()}
-                            >
-                              <Plus className="h-4 w-4 mr-1" />
-                              Create Contract
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleOpenRateDialog()}
-                            >
-                              <Plus className="h-4 w-4 mr-1" />
-                              Create Rate
-                            </Button>
-                          </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ) : (
-                    <div className="text-center py-6 text-sm text-muted-foreground">
-                      No generic rates found. Use "New Generic Rate" button above to create one.
-                    </div>
-                  )}
-                </AccordionContent>
-              </AccordionItem>
-            )
-          })()}
-          
+        <Accordion type="multiple" defaultValue={tours.slice(0, 3).map(t => `tour-${t.id}`)} className="space-y-2">
           {/* Group by Tours */}
           {tours
             .filter(tour => filterTour === 'all' || tour.id.toString() === filterTour)
@@ -1430,34 +686,40 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                             Add contracts and rates to manage service inventory for this tour
                           </p>
                           <div className="flex gap-3 justify-center">
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setContractForm({
-                                  ...contractForm,
-                                  tour_id: tour.id,
-                                  inventory_type_id: 0
-                                })
-                                setIsContractDialogOpen(true)
-                              }}
-                            >
-                              <Plus className="h-4 w-4 mr-2" />
-                              Add Contract
-                            </Button>
-                            <Button
-                              variant="outline"
-                              onClick={() => {
-                                setRateForm({
-                                  ...rateForm,
-                                  tour_id: tour.id,
-                                  inventory_type_id: 0
-                                })
-                                setIsRateDialogOpen(true)
-                              }}
-                            >
-                              <Plus className="h-4 w-4 mr-2" />
-                              Add Rate
-                            </Button>
+                            {serviceInventoryTypes.slice(0, 3).map(type => (
+                              <Button
+                                key={type.id}
+                                variant="outline"
+                                onClick={() => {
+                                  const form = {
+                                    ...contractForm,
+                                    inventory_type_id: type.id,
+                                    tour_id: tour.id
+                                  }
+                                  setContractForm(form)
+                                  setIsContractDialogOpen(true)
+                                }}
+                              >
+                                <Plus className="h-4 w-4 mr-2" />
+                                Add {type.name}
+                              </Button>
+                            ))}
+                            {serviceInventoryTypes.length > 3 && (
+                              <Button
+                                variant="outline"
+                                onClick={() => {
+                                  setContractForm({
+                                    ...contractForm,
+                                    tour_id: tour.id,
+                                    inventory_type_id: 0
+                                  })
+                                  setIsContractDialogOpen(true)
+                                }}
+                              >
+                                <Plus className="h-4 w-4 mr-2" />
+                                Add Other Service...
+                              </Button>
+                            )}
                           </div>
                         </CardContent>
                       </Card>
@@ -1503,19 +765,46 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                 onClick={() => handleOpenRateDialog(undefined, inventoryType.id)}
                               >
                                 <Plus className="h-3 w-3 mr-1" />
-                                New Rate
+                                Buy-to-Order Rate
                               </Button>
                             </div>
                           </div>
 
-                          {/* Contracts & Rates - Accordion Based */}
-                          {typeContracts.length > 0 ? (
-                            <div className="space-y-3">
+                          {/* Unified Rates Table - All Rates Together */}
+                          {typeRates.length > 0 ? (
+                            <div className="space-y-4">
                               <div className="flex items-center justify-between">
                                 <h4 className="font-semibold text-sm flex items-center gap-2">
-                                  <FileText className="h-4 w-4" />
-                                  Contracts ({typeContracts.length})
+                                  <DollarSign className="h-4 w-4" />
+                                  All Rates ({typeRates.length})
                                 </h4>
+                                <div className="flex items-center gap-2">
+                                  <Select 
+                                    value={getRateFilter(inventoryType.id).category} 
+                                    onValueChange={(value) => setRateFilter(inventoryType.id, { category: value })}
+                                  >
+                                    <SelectTrigger className="h-8 w-40 text-xs">
+                                      <SelectValue placeholder="Filter by category" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                      <SelectItem value="all">All Categories</SelectItem>
+                                      {inventoryType.service_categories.map((cat: any) => (
+                                        <SelectItem key={cat.id} value={cat.id}>
+                                          {cat.category_name}
+                                        </SelectItem>
+                                      ))}
+                                    </SelectContent>
+                                  </Select>
+                                  
+                                  <Button
+                                    size="sm"
+                                    variant={getRateFilter(inventoryType.id).activeOnly ? 'default' : 'outline'}
+                                    onClick={() => setRateFilter(inventoryType.id, { activeOnly: !getRateFilter(inventoryType.id).activeOnly })}
+                                    className="h-8 text-xs"
+                                  >
+                                    {getRateFilter(inventoryType.id).activeOnly ? 'Active Only' : 'All Status'}
+                                  </Button>
+                                </div>
                               </div>
                               
                               <Accordion type="single" collapsible className="space-y-2">
@@ -1529,31 +818,36 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                       value={`contract-${contract.id}`}
                                       className="border rounded-lg"
                                     >
-                                      <AccordionTrigger className="px-3 py-2 hover:no-underline">
+                                      <AccordionTrigger className="px-4 py-4 hover:no-underline">
                                         <div className="flex items-center justify-between w-full pr-2">
-                                          <div className="flex items-center gap-2">
-                                            
-                                            <span className="font-semibold text-sm">{contract.contract_name}</span>
-                                            {contract.active ? (
-                                              <Badge className="text-xs bg-green-500 text-white">
-                                                <CheckCircle2 className="h-3 w-3 mr-1" />
-                                                Active
-                                              </Badge>
-                                            ) : (
-                                              <Badge variant="secondary" className="text-xs">
-                                                <XCircle className="h-3 w-3 mr-1" />
-                                                Inactive
-                                              </Badge>
-                                            )}
-                                          </div>
-                                          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                                            <span>{contract.supplierName}</span>
-                                            <span>•</span>
-                                            <span>{contractRates.length} rates</span>
-                                            <span>•</span>
-                                            <span className="font-medium" style={{ color: 'hsl(var(--primary))' }}>
-                                              {(contract.markup_percentage * 100).toFixed(0)}%
-                                            </span>
+                                          <div className="flex-1">
+                                            <div className="flex items-center gap-3 mb-2">
+                                              <div className="w-2 h-2 rounded-full" style={{ backgroundColor: contract.active ? 'hsl(var(--primary))' : 'hsl(var(--muted-foreground))' }}></div>
+                                              <span className="font-bold text-base">{contract.contract_name}</span>
+                                              {contract.active ? (
+                                                <Badge className="text-xs bg-green-500 text-white">
+                                                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                                                  Active
+                                                </Badge>
+                                              ) : (
+                                                <Badge variant="secondary" className="text-xs">
+                                                  <XCircle className="h-3 w-3 mr-1" />
+                                                  Inactive
+                                                </Badge>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-4 text-sm">
+                                              <div className="flex items-center gap-1 text-muted-foreground">
+                                                <Building className="h-4 w-4" />
+                                                <span className="font-medium">{contract.supplierName}</span>
+                                              </div>
+                                              <div className="flex items-center gap-4">
+                                                <span className="text-muted-foreground">{contractRates.length} rates</span>
+                                                <span className="font-semibold" style={{ color: 'hsl(var(--primary))' }}>
+                                                  {(contract.markup_percentage * 100).toFixed(0)}% markup
+                                                </span>
+                                              </div>
+                                            </div>
                                           </div>
                                         </div>
                                       </AccordionTrigger>
@@ -1561,7 +855,7 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                       <AccordionContent className="px-4 pb-4">
                                         <div className="space-y-4 pt-2">
                                           {/* Action Buttons */}
-                                          <div className="flex gap-2 flex-wrap">
+                                          <div className="flex gap-2">
                                             <Button
                                               size="sm"
                                               variant="outline"
@@ -1576,15 +870,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                             >
                                               <Copy className="h-3 w-3 mr-1" />
                                               Clone
-                                            </Button>
-                                            <Button
-                                              size="sm"
-                                              variant="default"
-                                              onClick={() => handleGenerateRatesFromContract(contract)}
-                                              disabled={contractRates.length > 0}
-                                            >
-                                              <Plus className="h-3 w-3 mr-1" />
-                                              Generate Rates
                                             </Button>
                                             <Button
                                               size="sm"
@@ -1648,16 +933,9 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                           {/* Allocations - Cleaner Design */}
                                           {contract.service_allocations && contract.service_allocations.length > 0 && (
                                             <div className="space-y-3">
-                                              <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                                                  <Package className="h-4 w-4" />
-                                                  <span>Allocations ({contract.service_allocations.length})</span>
-                                                </div>
-                                                {contractRates.length === 0 && (
-                                                  <Badge variant="outline" className="text-xs text-orange-600 border-orange-600">
-                                                    No rates generated
-                                                  </Badge>
-                                                )}
+                                              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                                <Package className="h-4 w-4" />
+                                                <span>Allocations ({contract.service_allocations.length})</span>
                                               </div>
                                               <div className="grid gap-3">
                                                 {contract.service_allocations.map((alloc: any, idx: number) => (
@@ -1682,7 +960,116 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                                             </div>
                                           )}
 
-                                          {/* Contract Rates - Moved to unified table below */}
+                                          {/* Contract Rates - Improved Table */}
+                                          {contractRates.length > 0 && (
+                                            <div className="space-y-3">
+                                              <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                                                <DollarSign className="h-4 w-4" />
+                                                <span>Contract Rates ({contractRates.length})</span>
+                                              </div>
+                                              
+                                              <div className="border rounded-lg overflow-hidden">
+                                                <table className="w-full text-sm">
+                                                  <thead style={{ backgroundColor: 'hsl(var(--muted) / 0.5)' }}>
+                                                    <tr>
+                                                      <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Category</th>
+                                                      <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Cost</th>
+                                                      <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Sell</th>
+                                                      <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Margin</th>
+                                                      <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Available</th>
+                                                      <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Status</th>
+                                                      <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Actions</th>
+                                                    </tr>
+                                                  </thead>
+                                                  <tbody>
+                                                    {contractRates.map((rate: any, idx: number) => {
+                                                      const margin = rate.selling_price - rate.base_rate
+                                                      const marginPercent = (margin / rate.base_rate) * 100
+
+                                                      return (
+                                                        <tr
+                                                          key={rate.id}
+                                                          className={`${rate.active ? 'hover:bg-muted/30' : 'opacity-50'} transition-colors`}
+                                                          style={{ borderTop: idx > 0 ? '1px solid hsl(var(--border))' : 'none' }}
+                                                        >
+                                                          <td className="p-2">
+                                                            <div className="font-semibold text-sm">{rate.categoryName}</div>
+                                                            {rate.direction && (
+                                                              <Badge variant="secondary" className="text-[10px] mt-1">
+                                                                {rate.direction === 'inbound' ? '→ Arrival' :
+                                                                 rate.direction === 'outbound' ? '← Departure' :
+                                                                 rate.direction === 'round_trip' ? '↔ Round Trip' :
+                                                                 rate.direction}
+                                                              </Badge>
+                                                            )}
+                                                          </td>
+                                                          <td className="p-2 text-right">
+                                                            <div className="font-medium text-sm">{formatCurrency(rate.base_rate)}</div>
+                                                            <div className="text-xs text-muted-foreground">{rate.currency}</div>
+                                                          </td>
+                                                          <td className="p-2 text-right">
+                                                            <div className="font-bold" style={{ color: 'hsl(var(--primary))' }}>
+                                                              {formatCurrency(rate.selling_price)}
+                                                            </div>
+                                                          </td>
+                                                          <td className="p-2 text-right">
+                                                            <div className="font-semibold text-green-600 text-sm">
+                                                              +{formatCurrency(margin)}
+                                                            </div>
+                                                            <div className="text-xs text-muted-foreground">
+                                                              ({marginPercent.toFixed(0)}%)
+                                                            </div>
+                                                          </td>
+                                                          <td className="p-2 text-center">
+                                                            <div className="font-semibold">{rate.available_quantity || 0}</div>
+                                                            <div className="text-xs text-muted-foreground">of {rate.allocated_quantity || 0}</div>
+                                                          </td>
+                                                          <td className="p-2 text-center">
+                                                            <button
+                                                              onClick={() => handleToggleRateStatus(rate)}
+                                                              className="inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                                                            >
+                                                              {rate.active ? (
+                                                                <>
+                                                                  <CheckCircle2 className="h-3 w-3 text-green-600" />
+                                                                  <span className="text-green-600">Active</span>
+                                                                </>
+                                                              ) : (
+                                                                <>
+                                                                  <XCircle className="h-3 w-3 text-muted-foreground" />
+                                                                  <span className="text-muted-foreground">Inactive</span>
+                                                                </>
+                                                              )}
+                                                            </button>
+                                                          </td>
+                                                          <td className="p-2 text-center">
+                                                            <div className="flex justify-center gap-1">
+                                                              <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                onClick={() => handleOpenRateDialog(rate)}
+                                                                className="h-7 px-2"
+                                                              >
+                                                                Edit
+                                                              </Button>
+                                                              <Button
+                                                                size="sm"
+                                                                variant="ghost"
+                                                                onClick={() => handleDeleteRate(rate)}
+                                                                className="h-7 px-2"
+                                                              >
+                                                                <Trash2 className="h-3 w-3 text-destructive" />
+                                                              </Button>
+                                                            </div>
+                                                          </td>
+                                                        </tr>
+                                                      )
+                                                    })}
+                                                  </tbody>
+                                                </table>
+                                              </div>
+                                            </div>
+                                          )}
                                         </div>
                                       </AccordionContent>
                                     </AccordionItem>
@@ -1692,232 +1079,169 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                             </div>
                           ) : null}
 
-                          {/* Unified Rates Table - All Rates (Contract + Buy-to-Order) */}
-                          {typeRates.length > 0 && (
-                            <div className="space-y-3 mt-6">
-                              <div className="flex items-center justify-between">
-                                <h4 className="font-semibold text-sm flex items-center gap-2">
-                                  <DollarSign className="h-4 w-4" style={{ color: 'hsl(var(--primary))' }} />
-                                  All Rates ({typeRates.length})
-                                </h4>
-                                <div className="flex items-center gap-2">
-                                  <Select 
-                                    value={getRateFilter(inventoryType.id).category} 
-                                    onValueChange={(value) => setRateFilter(inventoryType.id, { category: value })}
-                                  >
-                                    <SelectTrigger className="h-7 w-40 text-xs">
-                                      <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                      <SelectItem value="all">All Categories</SelectItem>
-                                      {inventoryType.service_categories.map((cat: any) => (
-                                        <SelectItem key={cat.id} value={cat.id}>
-                                          {cat.category_name}
-                                        </SelectItem>
-                                      ))}
-                                    </SelectContent>
-                                  </Select>
-                                  
-                                  <Button
-                                    size="sm"
-                                    variant={getRateFilter(inventoryType.id).activeOnly ? 'default' : 'outline'}
-                                    onClick={() => setRateFilter(inventoryType.id, { activeOnly: !getRateFilter(inventoryType.id).activeOnly })}
-                                    className="h-7 text-xs"
-                                  >
-                                    {getRateFilter(inventoryType.id).activeOnly ? 'Active Only' : 'All Status'}
-                                  </Button>
+                          {/* Buy-to-Order Rates (No Contract) */}
+                          {(() => {
+                            let buyToOrderRates = typeRates.filter((r: any) => r.inventory_type === 'buy_to_order')
+                            
+                            if (buyToOrderRates.length === 0) return null
+                            
+                            // Apply filters
+                            const rateFilter = getRateFilter(inventoryType.id)
+                            if (rateFilter.category !== 'all') {
+                              buyToOrderRates = buyToOrderRates.filter(r => r.category_id === rateFilter.category)
+                            }
+                            if (rateFilter.activeOnly) {
+                              buyToOrderRates = buyToOrderRates.filter(r => r.active)
+                            }
+                            
+                            const totalBuyToOrder = typeRates.filter((r: any) => r.inventory_type === 'buy_to_order').length
+                            
+                            return (
+                              <div className="space-y-3 mt-4">
+                                <div className="flex items-center justify-between">
+                                  <h4 className="font-semibold text-sm flex items-center gap-2">
+                                    <DollarSign className="h-4 w-4" style={{ color: 'hsl(var(--primary))' }} />
+                                    Buy-to-Order Rates ({totalBuyToOrder})
+                                  </h4>
+                                  <div className="flex items-center gap-2">
+                                    <Select 
+                                      value={rateFilter.category} 
+                                      onValueChange={(value) => setRateFilter(inventoryType.id, { category: value })}
+                                    >
+                                      <SelectTrigger className="h-7 w-40 text-xs">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="all">All Categories</SelectItem>
+                                        {inventoryType.service_categories.map((cat: any) => (
+                                          <SelectItem key={cat.id} value={cat.id}>
+                                            {cat.category_name}
+                                          </SelectItem>
+                                        ))}
+                                      </SelectContent>
+                                    </Select>
+                                    
+                                    <Button
+                                      size="sm"
+                                      variant={rateFilter.activeOnly ? 'default' : 'outline'}
+                                      onClick={() => setRateFilter(inventoryType.id, { activeOnly: !rateFilter.activeOnly })}
+                                      className="h-7 text-xs"
+                                    >
+                                      {rateFilter.activeOnly ? 'Active Only' : 'All Status'}
+                                    </Button>
+                                  </div>
                                 </div>
-                              </div>
-                              
-                              {(() => {
-                                let filteredRates = typeRates
                                 
-                                // Apply filters
-                                const rateFilter = getRateFilter(inventoryType.id)
-                                if (rateFilter.category !== 'all') {
-                                  filteredRates = filteredRates.filter(r => r.category_id === rateFilter.category)
-                                }
-                                if (rateFilter.activeOnly) {
-                                  filteredRates = filteredRates.filter(r => r.active)
-                                }
-                                
-                                return (
-                                  <Card>
-                                    <CardContent className="p-0">
-                                      <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                          <thead style={{ backgroundColor: 'hsl(var(--muted) / 0.5)' }}>
-                                            <tr>
-                                              <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Category</th>
-                                              <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Source</th>
-                                              <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Valid Period</th>
-                                              <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Days</th>
-                                              <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Cost</th>
-                                              <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Sell</th>
-                                              <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Margin</th>
-                                              <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Available</th>
-                                              <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Status</th>
-                                              <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Actions</th>
-                                            </tr>
-                                          </thead>
-                                          <tbody>
-                                            {filteredRates.map((rate: any, idx: number) => {
-                                              const margin = rate.selling_price - rate.base_rate
-                                              const marginPercent = (margin / rate.base_rate) * 100
-                                              const contract = serviceContracts.find(c => c.id === rate.contract_id)
-                                              
-                                              // Format days of week
-                                              const formatDaysOfWeek = (days: any) => {
-                                                try {
-                                                  if (!days) return 'All days'
-                                                  
-                                                  // Handle object format: {monday: true, tuesday: false, ...}
-                                                  if (typeof days === 'object' && !Array.isArray(days)) {
-                                                    const dayMap: Record<string, string> = {
-                                                      'monday': 'Mon', 'tuesday': 'Tue', 'wednesday': 'Wed',
-                                                      'thursday': 'Thu', 'friday': 'Fri', 'saturday': 'Sat', 'sunday': 'Sun'
-                                                    }
-                                                    const activeDays = Object.entries(days)
-                                                      .filter(([, isActive]) => isActive === true)
-                                                      .map(([day]) => dayMap[day] || day)
-                                                      
-                                                    return activeDays.length > 0 ? activeDays.join(', ') : 'No days set'
-                                                  }
-                                                  
-                                                  // Handle array format: ['monday', 'tuesday', ...]
-                                                  if (Array.isArray(days)) {
-                                                    if (days.length === 0) return 'All days'
-                                                    const dayMap: Record<string, string> = {
-                                                      'monday': 'Mon', 'tuesday': 'Tue', 'wednesday': 'Wed',
-                                                      'thursday': 'Thu', 'friday': 'Fri', 'saturday': 'Sat', 'sunday': 'Sun'
-                                                    }
-                                                    return days.map(day => dayMap[day.toLowerCase()] || day).join(', ')
-                                                  }
-                                                  
-                                                  return 'All days'
-                                                } catch (error) {
-                                                  console.error('Error formatting days of week:', error, 'days:', days)
-                                                  return 'Error'
-                                                }
-                                              }
+                                {(rateFilter.category !== 'all' || rateFilter.activeOnly) && (
+                                  <div className="text-xs text-muted-foreground">
+                                    Showing {buyToOrderRates.length} of {totalBuyToOrder} rates
+                                  </div>
+                                )}
 
-                                              return (
-                                                <tr
-                                                  key={rate.id}
-                                                  className={`${rate.active ? 'hover:bg-muted/30' : 'opacity-50'} transition-colors`}
-                                                  style={{ borderTop: idx > 0 ? '1px solid hsl(var(--border))' : 'none' }}
-                                                >
-                                                  <td className="p-3">
-                                                    <div className="font-medium">{rate.categoryName}</div>
-                                                    {rate.direction && (
-                                                      <div className="text-xs text-muted-foreground mt-1">
-                                                        {rate.direction.replace('_', ' ').toUpperCase()}
-                                                      </div>
-                                                    )}
-                                                  </td>
-                                                  <td className="p-3">
-                                                    {rate.inventory_type === 'buy_to_order' ? (
-                                                      <Badge variant="secondary" className="text-xs">
-                                                        Buy-to-Order
-                                                      </Badge>
-                                                    ) : (
-                                                      <div>
-                                                        <div className="font-medium text-xs">{contract?.contract_name || 'Unknown Contract'}</div>
-                                                        <div className="text-xs text-muted-foreground">{contract?.supplierName || ''}</div>
-                                                      </div>
-                                                    )}
-                                                  </td>
-                                                  <td className="p-3 text-center">
-                                                    <div className="text-xs flex items-center justify-center gap-1">
-                                                      <div className="font-medium">
-                                                        {new Date(rate.valid_from).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                                      </div>
-                                                      <div className="text-muted-foreground">to</div>
-                                                      <div className="font-medium">
-                                                        {new Date(rate.valid_to).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                                                      </div>
-                                                    </div>
-                                                  </td>
-                                                  <td className="p-3 text-center">
-                                                    <div className="text-xs">
-                                                      {formatDaysOfWeek(rate.days_of_week)}
-                                                    </div>
-                                                  </td>
-                                                  <td className="p-3 text-right text-muted-foreground font-mono">
-                                                    {formatCurrency(rate.base_rate)}
-                                                  </td>
-                                                  <td className="p-3 text-right font-bold font-mono" style={{ color: 'hsl(var(--primary))' }}>
+                              {buyToOrderRates.length > 0 ? (
+                                <Card>
+                                  <CardContent className="p-0">
+                                    <div className="overflow-x-auto">
+                                      <table className="w-full text-sm">
+                                        <thead style={{ backgroundColor: 'hsl(var(--muted) / 0.5)' }}>
+                                          <tr>
+                                            <th className="text-left p-3 font-semibold text-xs uppercase tracking-wide">Category</th>
+                                            <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Cost</th>
+                                            <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Sell</th>
+                                            <th className="text-right p-3 font-semibold text-xs uppercase tracking-wide">Margin</th>
+                                            <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Status</th>
+                                            <th className="text-center p-3 font-semibold text-xs uppercase tracking-wide">Actions</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {buyToOrderRates.map((rate: any, idx: number) => {
+                                            const margin = rate.selling_price - rate.base_rate
+                                            const marginPercent = (margin / rate.base_rate) * 100
+
+                                            return (
+                                              <tr
+                                                key={rate.id}
+                                                className={`${rate.active ? 'hover:bg-muted/30' : 'opacity-50'} transition-colors`}
+                                                style={{ borderTop: idx > 0 ? '1px solid hsl(var(--border))' : 'none' }}
+                                              >
+                                                <td className="p-2">
+                                                  <div className="font-semibold text-sm">{rate.categoryName}</div>
+                                                  {rate.direction && (
+                                                    <Badge variant="secondary" className="text-[10px] mt-1">
+                                                      {rate.direction === 'inbound' ? '→ Arrival' :
+                                                       rate.direction === 'outbound' ? '← Departure' :
+                                                       rate.direction === 'round_trip' ? '↔ Round Trip' :
+                                                       rate.direction}
+                                                    </Badge>
+                                                  )}
+                                                </td>
+                                                <td className="p-2 text-right">
+                                                  <div className="font-medium">{formatCurrency(rate.base_rate)}</div>
+                                                  <div className="text-xs text-muted-foreground">{rate.currency}</div>
+                                                </td>
+                                                <td className="p-2 text-right">
+                                                  <div className="font-bold" style={{ color: 'hsl(var(--primary))' }}>
                                                     {formatCurrency(rate.selling_price)}
-                                                  </td>
-                                                  <td className="p-3 text-right">
-                                                    <div className="text-green-600 font-medium">
-                                                      +{formatCurrency(margin)}
-                                                    </div>
-                                                    <div className="text-xs text-muted-foreground">
-                                                      ({marginPercent.toFixed(0)}%)
-                                                    </div>
-                                                  </td>
-                                                  <td className="p-3 text-center">
-                                                    {rate.inventory_type === 'buy_to_order' ? (
-                                                      <span className="text-xs text-muted-foreground">Unlimited</span>
-                                                    ) : (
-                                                      <div>
-                                                        <div className="font-medium">
-                                                          {rate.available_quantity || 0}
-                                                        </div>
-                                                        <div className="text-xs text-muted-foreground">
-                                                          of {rate.allocated_quantity || 0}
-                                                        </div>
-                                                      </div>
-                                                    )}
-                                                  </td>
-                                                  <td className="p-3 text-center">
+                                                  </div>
+                                                </td>
+                                                <td className="p-2 text-right">
+                                                  <div className="font-semibold text-green-600 text-sm">
+                                                    +{formatCurrency(margin)}
+                                                  </div>
+                                                  <div className="text-xs text-muted-foreground">
+                                                    ({marginPercent.toFixed(0)}%)
+                                                  </div>
+                                                </td>
+                                                <td className="p-2 text-center">
+                                                  <button
+                                                    onClick={() => handleToggleRateStatus(rate)}
+                                                    className="inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                                                  >
                                                     {rate.active ? (
-                                                      <Badge className="text-xs bg-green-500 text-white">
-                                                        <CheckCircle2 className="h-3 w-3 mr-1" />
-                                                        Active
-                                                      </Badge>
+                                                      <>
+                                                        <CheckCircle2 className="h-3 w-3 text-green-600" />
+                                                        <span className="text-green-600">Active</span>
+                                                      </>
                                                     ) : (
-                                                      <Badge variant="secondary" className="text-xs">
-                                                        <XCircle className="h-3 w-3 mr-1" />
-                                                        Inactive
-                                                      </Badge>
+                                                      <>
+                                                        <XCircle className="h-3 w-3 text-muted-foreground" />
+                                                        <span className="text-muted-foreground">Inactive</span>
+                                                      </>
                                                     )}
-                                                  </td>
-                                                  <td className="p-3 text-center">
-                                                    <div className="flex justify-center gap-1">
-                                                      <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        onClick={() => handleOpenRateDialog(rate)}
-                                                        title="Edit rate"
-                                                      >
-                                                        <Pencil className="h-3 w-3" />
-                                                      </Button>
-                                                      <Button
-                                                        size="sm"
-                                                        variant="ghost"
-                                                        onClick={() => handleDeleteRate(rate)}
-                                                        title="Delete rate"
-                                                      >
-                                                        <Trash2 className="h-3 w-3 text-destructive" />
-                                                      </Button>
-                                                    </div>
-                                                  </td>
-                                                </tr>
-                                              )
-                                            })}
-                                          </tbody>
-                                        </table>
-                                      </div>
-                                    </CardContent>
-                                  </Card>
-                                )
-                              })()}
+                                                  </button>
+                                                </td>
+                                                <td className="p-2 text-center">
+                                                  <div className="flex justify-center gap-1">
+                                                    <Button
+                                                      size="sm"
+                                                      variant="ghost"
+                                                      onClick={() => handleOpenRateDialog(rate)}
+                                                      className="h-7 px-2"
+                                                    >
+                                                      Edit
+                                                    </Button>
+                                                    <Button
+                                                      size="sm"
+                                                      variant="ghost"
+                                                      onClick={() => handleDeleteRate(rate)}
+                                                      className="h-7 px-2"
+                                                    >
+                                                      <Trash2 className="h-3 w-3 text-destructive" />
+                                                    </Button>
+                                                  </div>
+                                                </td>
+                                              </tr>
+                                            )
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  </CardContent>
+                                </Card>
+                              ) : null}
                             </div>
-                          )}
-
-                          {/* Buy-to-Order Rates - Now shown in unified table above */}
+                            )
+                          })()}
                         </div>
                       )
                     })}
@@ -1926,6 +1250,51 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
               </AccordionItem>
             )
           })}
+
+          {/* Generic Contracts Section (No Tour Linked) */}
+          {(() => {
+            const genericContracts = filteredServiceContracts.filter(c => !c.tour_id)
+            const genericRates = filteredServiceRates.filter(r => !r.tour_id)
+            
+            if (genericContracts.length === 0 && genericRates.length === 0) return null
+
+            return (
+              <AccordionItem
+                value="generic"
+                className="border-2 rounded-lg bg-card"
+                style={{ borderColor: 'hsl(var(--muted-foreground) / 0.2)' }}
+              >
+                <AccordionTrigger className="px-4 hover:no-underline">
+                  <div className="flex items-center justify-between w-full pr-4">
+                    <div className="flex items-center gap-3">
+                      <Package className="h-5 w-5 text-muted-foreground" />
+                      <div className="text-left">
+                        <div className="font-bold text-base">Generic Services (No Tour)</div>
+                        <div className="text-sm text-muted-foreground flex items-center gap-2">
+                          <span>Reusable across all tours</span>
+                          <span>•</span>
+                          <span>{genericContracts.length} {genericContracts.length === 1 ? 'contract' : 'contracts'}</span>
+                          <span>•</span>
+                          <span>{genericRates.length} {genericRates.length === 1 ? 'rate' : 'rates'}</span>
+                        </div>
+                      </div>
+                    </div>
+                    <Badge variant="outline">Generic</Badge>
+                  </div>
+                </AccordionTrigger>
+
+                <AccordionContent className="px-4 pb-4">
+                  <div className="text-sm text-muted-foreground mb-3">
+                    These contracts and rates are not linked to any specific tour and can be used across all events.
+                  </div>
+                  {/* Note: Generic contracts display would go here, similar structure to tour-based ones */}
+                  <div className="text-center py-6 text-sm text-muted-foreground">
+                    Generic contracts view - expand inventory types above to manage
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            )
+          })()}
         </Accordion>
       )}
 
@@ -2166,42 +1535,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
                   />
                 </div>
               </div>
-            </div>
-
-            {/* Days of Week */}
-            <div className="border-t pt-4 space-y-3">
-              <h4 className="font-medium">Available Days</h4>
-              <div className="grid grid-cols-7 gap-2">
-                {Object.entries({
-                  monday: 'Mon',
-                  tuesday: 'Tue', 
-                  wednesday: 'Wed',
-                  thursday: 'Thu',
-                  friday: 'Fri',
-                  saturday: 'Sat',
-                  sunday: 'Sun'
-                }).map(([key, label]) => (
-                  <div key={key} className="flex items-center space-x-2">
-                    <Checkbox
-                      id={`contract-${key}`}
-                      checked={contractForm.days_of_week[key as keyof typeof contractForm.days_of_week]}
-                      onChange={(e) => setContractForm({
-                        ...contractForm,
-                        days_of_week: {
-                          ...contractForm.days_of_week,
-                          [key]: (e.target as HTMLInputElement).checked
-                        }
-                      })}
-                    />
-                    <Label htmlFor={`contract-${key}`} className="text-sm">
-                      {label}
-                    </Label>
-                  </div>
-                ))}
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Select which days this contract's services are available
-              </p>
             </div>
 
             {/* Notes */}
@@ -2590,56 +1923,6 @@ export function ServiceInventoryNew({ selectedTypeId: initialSelectedTypeId }: S
             <Button variant="outline" onClick={() => setIsRateDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveRate}>
               {editingRate ? 'Update' : 'Create'} Rate
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Import Dialog */}
-      <Dialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Import Service Contracts</DialogTitle>
-            <DialogDescription>
-              Upload a CSV file to import service contracts. Download the template for the correct format.
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="space-y-4">
-            <div className="border-2 border-dashed border-muted-foreground/25 rounded-lg p-6 text-center">
-              <Upload className="h-8 w-8 mx-auto mb-2 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground mb-2">Choose a CSV file to upload</p>
-              <input
-                type="file"
-                accept=".csv"
-                onChange={handleImport}
-                className="hidden"
-                id="csv-import"
-              />
-              <label
-                htmlFor="csv-import"
-                className="inline-flex items-center justify-center rounded-md text-sm font-medium ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground hover:bg-primary/90 h-10 px-4 py-2 cursor-pointer"
-              >
-                Select File
-              </label>
-            </div>
-            
-            <div className="text-xs text-muted-foreground">
-              <p>CSV format should include columns:</p>
-              <ul className="list-disc list-inside mt-1 space-y-1">
-                <li>Contract Name</li>
-                <li>Supplier ID</li>
-                <li>Inventory Type ID</li>
-                <li>Valid From (YYYY-MM-DD)</li>
-                <li>Valid To (YYYY-MM-DD)</li>
-                <li>Markup Percentage</li>
-              </ul>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsImportDialogOpen(false)}>
-              Cancel
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -18,7 +18,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion"
-import { AlertTriangle, Ban, Receipt, Coffee, Calendar as CalendarIcon, DollarSign as DollarIcon, Trash2, Bed, Percent } from 'lucide-react'
+import { AlertTriangle, Ban, Receipt, Coffee, DollarSign as DollarIcon, Trash2, Bed, Percent } from 'lucide-react'
 import { BoardType, BoardOption, AttritionStage, CancellationStage, PaymentSchedule, RoomAllocation, RoomGroup, OccupancyRate } from '@/contexts/data-context'
 import { BOARD_TYPE_LABELS } from '@/lib/pricing'
 import { toast } from 'sonner'
@@ -38,7 +38,6 @@ interface ContractFormProps {
     pricing_strategy?: 'per_occupancy' | 'flat_rate'
     occupancy_rates?: OccupancyRate[]
     markup_percentage?: number
-    shoulder_markup_percentage?: number
     days_of_week?: { mon: boolean; tue: boolean; wed: boolean; thu: boolean; fri: boolean; sat: boolean; sun: boolean }
     min_nights?: number
     max_nights?: number
@@ -47,8 +46,6 @@ interface ContractFormProps {
     resort_fee_per_night: number
     supplier_commission_rate: number
     board_options: BoardOption[]
-    pre_shoulder_rates: number[]
-    post_shoulder_rates: number[]
     attrition_stages: AttritionStage[]
     cancellation_stages: CancellationStage[]
     contracted_payment_total: number
@@ -64,10 +61,6 @@ interface ContractFormProps {
   setBoardTypeInput: (value: BoardType) => void
   boardCostInput: string
   setBoardCostInput: (value: string) => void
-  preShoulderInput: string
-  setPreShoulderInput: (value: string) => void
-  postShoulderInput: string
-  setPostShoulderInput: (value: string) => void
   attritionDateInput: string
   setAttritionDateInput: (value: string) => void
   attritionPercentInput: string
@@ -96,10 +89,6 @@ export function ContractForm({
   setBoardTypeInput,
   boardCostInput,
   setBoardCostInput,
-  preShoulderInput,
-  setPreShoulderInput,
-  postShoulderInput,
-  setPostShoulderInput,
   attritionDateInput,
   setAttritionDateInput,
   attritionPercentInput,
@@ -120,6 +109,7 @@ export function ContractForm({
   const [selectedRoomTypes, setSelectedRoomTypes] = useState<string[]>([])
   const [allocationLabel, setAllocationLabel] = useState('')
   const [allocationQty, setAllocationQty] = useState('')
+  const [allocationPoolId, setAllocationPoolId] = useState('')
   const [allocationSingleRate, setAllocationSingleRate] = useState('')
   const [allocationDoubleRate, setAllocationDoubleRate] = useState('')
   const [allocationTripleRate, setAllocationTripleRate] = useState('')
@@ -428,6 +418,11 @@ export function ContractForm({
                             {allocation.label && (
                               <Badge variant="default" className="text-xs">{allocation.label}</Badge>
                             )}
+                            {allocation.allocation_pool_id && (
+                              <Badge variant="secondary" className="text-xs bg-blue-100 text-blue-800">
+                                Pool: {allocation.allocation_pool_id}
+                              </Badge>
+                            )}
                             {roomGroups.map((rg, idx) => (
                               <Badge key={idx} variant="outline" className="text-xs">
                                 {rg?.room_type}
@@ -537,6 +532,21 @@ export function ContractForm({
                             className="h-8 text-xs"
                           />
                         </div>
+                      </div>
+                      
+                      {/* Allocation Pool ID */}
+                      <div className="border-t pt-3">
+                        <Label className="text-xs">Allocation Pool ID (for multi-rate periods)</Label>
+                        <Input
+                          type="text"
+                          placeholder="e.g., dec-2025-double-pool"
+                          value={allocationPoolId}
+                          onChange={(e) => setAllocationPoolId(e.target.value)}
+                          className="h-8 text-xs"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Optional: Use same Pool ID across contracts to share inventory (e.g., for shoulder nights)
+                        </p>
                       </div>
                       
                       {/* Occupancy Rates (optional overrides) */}
@@ -654,6 +664,7 @@ export function ContractForm({
                           room_group_ids: selectedRoomTypes,
                           quantity: qty,
                           label,
+                          allocation_pool_id: allocationPoolId || undefined, // NEW: Pool ID for multi-rate periods
                           // For per-occupancy strategy: use occupancy_rates
                           ...(formData.pricing_strategy === 'per_occupancy' && {
                             occupancy_rates: occupancyRates.length > 0 ? occupancyRates : undefined
@@ -673,6 +684,7 @@ export function ContractForm({
                         setSelectedRoomTypes([])
                         setAllocationLabel('')
                         setAllocationQty('')
+                        setAllocationPoolId('')
                         setAllocationSingleRate('')
                         setAllocationDoubleRate('')
                         setAllocationTripleRate('')
@@ -723,19 +735,6 @@ export function ContractForm({
                 </p>
               </div>
               
-              <div className="grid gap-2">
-                <Label>Shoulder Nights Markup (%)</Label>
-                <Input
-                  type="number"
-                  step="1"
-                  value={(formData.shoulder_markup_percentage || 0.30) * 100}
-                  onChange={(e) => setFormData({ ...formData, shoulder_markup_percentage: (parseFloat(e.target.value) || 30) / 100 })}
-                  placeholder="30"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Default: 30% (lower markup for pre/post tour nights)
-                </p>
-              </div>
             </div>
           </AccordionContent>
         </AccordionItem>
@@ -906,122 +905,6 @@ export function ContractForm({
           </AccordionContent>
         </AccordionItem>
       
-        {/* Shoulder Night Rates */}
-        <AccordionItem value="shoulder">
-          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
-            <div className="flex items-center gap-2">
-              <CalendarIcon className="h-4 w-4" />
-              Shoulder Night Rates
-              {((formData.pre_shoulder_rates?.length || 0) + (formData.post_shoulder_rates?.length || 0)) > 0 && (
-                <Badge variant="secondary" className="ml-2">
-                  {(formData.pre_shoulder_rates?.length || 0) + (formData.post_shoulder_rates?.length || 0)}
-                </Badge>
-              )}
-            </div>
-          </AccordionTrigger>
-          <AccordionContent>
-            <div className="space-y-4 pt-2">
-        
-        {/* Pre-Shoulder Rates */}
-        <div className="space-y-2">
-          <Label>Pre-Shoulder Rates (nights before start date)</Label>
-          <div className="flex gap-2">
-            <Input
-              type="number"
-              step="0.01"
-              placeholder="Rate for night -1"
-              value={preShoulderInput}
-              onChange={(e) => setPreShoulderInput(e.target.value)}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (preShoulderInput) {
-                  setFormData({
-                    ...formData,
-                    pre_shoulder_rates: [...formData.pre_shoulder_rates, parseFloat(preShoulderInput)]
-                  })
-                  setPreShoulderInput('')
-                }
-              }}
-            >
-              Add
-            </Button>
-          </div>
-          {formData.pre_shoulder_rates.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {formData.pre_shoulder_rates.map((rate, index) => (
-                <div key={index} className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-sm">
-                  <span>-{index + 1}: {rate}{formData.currency}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const newRates = [...formData.pre_shoulder_rates]
-                      newRates.splice(index, 1)
-                      setFormData({ ...formData, pre_shoulder_rates: newRates })
-                    }}
-                    className="ml-1 text-destructive hover:text-destructive/80"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-        
-        {/* Post-Shoulder Rates */}
-        <div className="space-y-2">
-          <Label>Post-Shoulder Rates (nights after end date)</Label>
-          <div className="flex gap-2">
-            <Input
-              type="number"
-              step="0.01"
-              placeholder="Rate for night +1"
-              value={postShoulderInput}
-              onChange={(e) => setPostShoulderInput(e.target.value)}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => {
-                if (postShoulderInput) {
-                  setFormData({
-                    ...formData,
-                    post_shoulder_rates: [...formData.post_shoulder_rates, parseFloat(postShoulderInput)]
-                  })
-                  setPostShoulderInput('')
-                }
-              }}
-            >
-              Add
-            </Button>
-          </div>
-          {formData.post_shoulder_rates.length > 0 && (
-            <div className="flex flex-wrap gap-2 mt-2">
-              {formData.post_shoulder_rates.map((rate, index) => (
-                <div key={index} className="flex items-center gap-1 bg-muted px-2 py-1 rounded text-sm">
-                  <span>+{index + 1}: {rate}{formData.currency}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const newRates = [...formData.post_shoulder_rates]
-                      newRates.splice(index, 1)
-                      setFormData({ ...formData, post_shoulder_rates: newRates })
-                    }}
-                    className="ml-1 text-destructive hover:text-destructive/80"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-            </div>
-          </AccordionContent>
-        </AccordionItem>
 
         {/* Attrition & Cancellation */}
         <AccordionItem value="attrition">

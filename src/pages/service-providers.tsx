@@ -78,6 +78,22 @@ export function ServiceProviders() {
   const [filterStatus, setFilterStatus] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
   
+  // Category filters and pagination (per service type)
+  const [categorySearchMap, setCategorySearchMap] = useState<Record<number, string>>({})
+  const [categoryPageMap, setCategoryPageMap] = useState<Record<number, number>>({})
+  const CATEGORIES_PER_PAGE = 10
+  
+  const getCategorySearch = (typeId: number) => categorySearchMap[typeId] || ''
+  const setCategorySearch = (typeId: number, search: string) => {
+    setCategorySearchMap(prev => ({ ...prev, [typeId]: search }))
+    setCategoryPageMap(prev => ({ ...prev, [typeId]: 1 })) // Reset to page 1 on search
+  }
+  
+  const getCategoryPage = (typeId: number) => categoryPageMap[typeId] || 1
+  const setCategoryPage = (typeId: number, page: number) => {
+    setCategoryPageMap(prev => ({ ...prev, [typeId]: page }))
+  }
+  
   const [providerForm, setProviderForm] = useState({
     name: '',
     category: 'transfer' as ServiceCategory,
@@ -481,20 +497,63 @@ export function ServiceProviders() {
                     </div>
 
                     {/* Service Categories Table */}
-                    {inventoryType.service_categories && inventoryType.service_categories.length > 0 && (
-                      <div className="border rounded-lg overflow-hidden">
-                        <table className="w-full text-sm">
-                          <thead style={{ backgroundColor: 'hsl(var(--muted))' }}>
-                            <tr>
-                              <th className="text-left p-3 font-medium">Category Name</th>
-                              <th className="text-left p-3 font-medium">Pricing Unit</th>
-                              <th className="text-left p-3 font-medium">Capacity</th>
-                              <th className="text-left p-3 font-medium">Features</th>
-                              <th className="text-center p-3 font-medium w-20">Actions</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {inventoryType.service_categories.map((sc: any, idx: number) => (
+                    {inventoryType.service_categories && inventoryType.service_categories.length > 0 && (() => {
+                      const categorySearch = getCategorySearch(inventoryType.id)
+                      const currentPage = getCategoryPage(inventoryType.id)
+                      
+                      // Filter categories by search
+                      const filteredCategories = inventoryType.service_categories.filter((sc: any) => {
+                        if (!categorySearch) return true
+                        return sc.category_name.toLowerCase().includes(categorySearch.toLowerCase()) ||
+                               sc.description?.toLowerCase().includes(categorySearch.toLowerCase()) ||
+                               sc.features?.toLowerCase().includes(categorySearch.toLowerCase())
+                      })
+                      
+                      // Pagination
+                      const totalPages = Math.ceil(filteredCategories.length / CATEGORIES_PER_PAGE)
+                      const startIdx = (currentPage - 1) * CATEGORIES_PER_PAGE
+                      const endIdx = startIdx + CATEGORIES_PER_PAGE
+                      const paginatedCategories = filteredCategories.slice(startIdx, endIdx)
+                      
+                      return (
+                        <div className="space-y-3">
+                          {/* Search Bar */}
+                          <div className="flex items-center gap-2">
+                            <Input
+                              placeholder="Search categories..."
+                              value={categorySearch}
+                              onChange={(e) => setCategorySearch(inventoryType.id, e.target.value)}
+                              className="max-w-xs h-9 text-sm"
+                            />
+                            {categorySearch && (
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => setCategorySearch(inventoryType.id, '')}
+                              >
+                                Clear
+                              </Button>
+                            )}
+                            {filteredCategories.length < inventoryType.service_categories.length && (
+                              <span className="text-xs text-muted-foreground">
+                                Showing {filteredCategories.length} of {inventoryType.service_categories.length}
+                              </span>
+                            )}
+                          </div>
+                        
+                          <div className="border rounded-lg overflow-hidden">
+                            <table className="w-full text-sm">
+                              <thead style={{ backgroundColor: 'hsl(var(--muted))' }}>
+                                <tr>
+                                  <th className="text-left p-3 font-medium">Category Name</th>
+                                  <th className="text-left p-3 font-medium">Pricing Unit</th>
+                                  <th className="text-left p-3 font-medium">Capacity</th>
+                                  <th className="text-left p-3 font-medium">Features</th>
+                                  <th className="text-center p-3 font-medium w-20">Actions</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {paginatedCategories.map((sc: any, idx: number) => (
                               <tr 
                                 key={sc.id}
                                 style={{ 
@@ -545,11 +604,42 @@ export function ServiceProviders() {
                                   </div>
                                 </td>
                               </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          
+                          {/* Pagination */}
+                          {totalPages > 1 && (
+                            <div className="flex items-center justify-between pt-2">
+                              <div className="text-xs text-muted-foreground">
+                                Page {currentPage} of {totalPages} ({filteredCategories.length} {filteredCategories.length === 1 ? 'category' : 'categories'})
+                              </div>
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setCategoryPage(inventoryType.id, Math.max(1, currentPage - 1))}
+                                  disabled={currentPage === 1}
+                                  className="h-7"
+                                >
+                                  Previous
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => setCategoryPage(inventoryType.id, Math.min(totalPages, currentPage + 1))}
+                                  disabled={currentPage === totalPages}
+                                  className="h-7"
+                                >
+                                  Next
+                                </Button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })()}
 
                     {(!inventoryType.service_categories || inventoryType.service_categories.length === 0) && (
                       <div className="text-center py-6 text-sm text-muted-foreground border rounded-lg" style={{ backgroundColor: 'hsl(var(--muted) / 0.3)' }}>

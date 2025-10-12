@@ -13,7 +13,7 @@ import {
 } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { useData, OccupancyType, Rate, Contract, BookingRoom, ServiceRate } from '@/contexts/data-context'
+import { useData, OccupancyType, BoardType, Rate, Contract, BookingRoom, ServiceRate } from '@/contexts/data-context'
 import { ShoppingCart, Trash2, Building2, DoorOpen, Package, Calendar, User, Check, Car, Ticket, Utensils, Palmtree } from 'lucide-react'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -51,7 +51,9 @@ interface ServiceCartItem {
 // Table Row for Room Rate
 function RoomRateRow({ 
   roomGroup, 
-  nights, 
+  nights,
+  checkInDate,
+  checkOutDate,
   onAddToCart 
 }: { 
   roomGroup: {
@@ -63,6 +65,8 @@ function RoomRateRow({
     maxMargin: number
   }
   nights: number
+  checkInDate: string
+  checkOutDate: string
   onAddToCart: (rateItem: any, quantity: number, occupancy: OccupancyType, guestsCount: number) => void
 }) {
   const availableOccupancies = useMemo(() => {
@@ -102,7 +106,22 @@ function RoomRateRow({
       rateItem.rate.occupancy_type === selectedOcc
     )
     
-    // Get all unique contracts from filtered rates
+    // NEW: Check if there are multiple rates with the same pool (multi-rate booking)
+    const poolGroups = new Map<string, typeof roomGroup.rates>()
+    ratesForSelectedOcc.forEach(rateItem => {
+      const poolId = rateItem.rate.allocation_pool_id
+      if (poolId) {
+        if (!poolGroups.has(poolId)) {
+          poolGroups.set(poolId, [])
+        }
+        poolGroups.get(poolId)!.push(rateItem)
+      }
+    })
+    
+    // Check if we have any multi-rate pools
+    const multiRatePools = Array.from(poolGroups.entries()).filter(([_, rates]) => rates.length > 1)
+    
+    // Get all unique contracts from filtered rates (for single-rate options)
     const uniqueContracts = new Map<number, typeof roomGroup.rates[0]>()
     ratesForSelectedOcc.forEach(rateItem => {
       const contractId = rateItem.contract?.id || 0
@@ -111,8 +130,69 @@ function RoomRateRow({
       }
     })
     
-    // For each unique contract, calculate pricing for selected occupancy
-    return Array.from(uniqueContracts.values()).map(rateItem => {
+    const options: any[] = []
+    
+    // Add multi-rate pool options FIRST (best option)
+    multiRatePools.forEach(([poolId, poolRates]) => {
+      console.log('🔍 Multi-rate pool detected:', poolId, 'with', poolRates.length, 'rates')
+      console.log('📅 Booking dates:', checkInDate, 'to', checkOutDate)
+      console.log('🎫 Pool rates:', poolRates.map(r => ({
+        id: r.rate.id,
+        dates: `${r.rate.valid_from || 'N/A'} to ${r.rate.valid_to || 'N/A'}`,
+        price: r.rate.rate
+      })))
+      
+      const splitStay = calculateSplitStayPrice(
+        checkInDate,
+        checkOutDate,
+        poolRates as any,
+        selectedOcc,
+        poolRates[0].rate.board_type
+      )
+      
+      console.log('💰 Split-stay calculation result:', splitStay)
+      
+      if (splitStay.isFullyCovered && splitStay.breakdown.length > 0) {
+        // Calculate pricing
+        const sellPrice = splitStay.totalPrice * 1.6
+        const marginPerRoom = sellPrice - splitStay.totalPrice
+        
+        console.log('✅ Creating multi-rate option:', {
+          costPerRoom: splitStay.totalPrice,
+          sellPerRoom: sellPrice,
+          breakdown: splitStay.breakdown
+        })
+        
+        options.push({
+          ...poolRates[0],
+          rate: {
+            ...poolRates[0].rate,
+            id: `pool-${poolId}`,
+          },
+          contract: {
+            ...poolRates[0].contract,
+            contract_name: `Multi-Rate (Pool: ${poolId.substring(0, 20)}...)`,
+          },
+          costPerRoom: splitStay.totalPrice,
+          sellPerRoom: sellPrice,
+          marginPerRoom,
+          marginPercent: ((marginPerRoom / splitStay.totalPrice) * 100),
+          commissionRate: poolRates[0].contract?.supplier_commission_rate || 0,
+          isSplitStay: true,
+          splitStayBreakdown: splitStay.breakdown,
+          poolId
+        })
+      } else {
+        console.log('⚠️ Split-stay not fully covered or no breakdown:', {
+          isFullyCovered: splitStay.isFullyCovered,
+          breakdownLength: splitStay.breakdown.length,
+          gaps: splitStay.gaps
+        })
+      }
+    })
+    
+    // Then add regular single-rate options
+    Array.from(uniqueContracts.values()).forEach(rateItem => {
         const { rate } = rateItem
         
         // For buy-to-order rates, create mock contract
@@ -135,7 +215,7 @@ function RoomRateRow({
         
         // Use stored board cost from rate, or fallback to contract
         const boardCost = rate.board_cost !== undefined ? rate.board_cost : 
-          effectiveContract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0
+          effectiveContract.board_options?.find((o: any) => o.board_type === rate.board_type)?.additional_cost || 0
         
         // Calculate base rate for selected occupancy
         let baseRate = rate.rate // Default to stored rate
@@ -157,7 +237,7 @@ function RoomRateRow({
         const marginPerRoom = sellPerRoom - costPerRoom
         const marginPercent = ((marginPerRoom / costPerRoom) * 100)
         
-        return {
+        options.push({
           ...rateItem,
           rate: {
             ...rate,
@@ -170,11 +250,18 @@ function RoomRateRow({
           marginPerRoom,
           marginPercent,
           commissionRate: effectiveContract.supplier_commission_rate || 0,
-          isBuyToOrder: (rateItem as any).isBuyToOrder || false
-        }
+          isBuyToOrder: (rateItem as any).isBuyToOrder || false,
+          isSplitStay: false
+        })
       })
-      .sort((a, b) => b.marginPerRoom - a.marginPerRoom) // Sort by best margin (highest first)
-  }, [roomGroup.rates, nights, selectedOcc])
+      
+      // Sort by best margin (multi-rate first, then by margin)
+      return options.sort((a, b) => {
+        if (a.isSplitStay && !b.isSplitStay) return -1
+        if (!a.isSplitStay && b.isSplitStay) return 1
+        return b.marginPerRoom - a.marginPerRoom
+      })
+  }, [roomGroup.rates, nights, selectedOcc, checkInDate, checkOutDate])
   
   useEffect(() => {
     if (contractOptions.length > 0) {
@@ -190,6 +277,16 @@ function RoomRateRow({
   const selectedPrice = useMemo(() => {
     if (!selectedRateItem) return { cost: 0, sell: 0, margin: 0 }
     
+    // For split-stay bookings, use pre-calculated prices
+    if (selectedRateItem.isSplitStay) {
+      return {
+        cost: selectedRateItem.costPerRoom * selectedQty,
+        sell: selectedRateItem.sellPerRoom * selectedQty,
+        margin: selectedRateItem.marginPerRoom * selectedQty
+      }
+    }
+    
+    // For single-rate bookings, calculate normally
     const { rate } = selectedRateItem
     
     // Use effective contract (handles buy-to-order)
@@ -212,7 +309,7 @@ function RoomRateRow({
     
     // Use stored board cost from rate, or fallback to contract
     const boardCost = rate.board_cost !== undefined ? rate.board_cost : 
-      effectiveContract.board_options?.find(o => o.board_type === rate.board_type)?.additional_cost || 0
+      effectiveContract.board_options?.find((o: any) => o.board_type === rate.board_type)?.additional_cost || 0
     
     // Calculate base rate for selected occupancy
     let baseRate = rate.rate // Default to stored rate
@@ -298,8 +395,11 @@ function RoomRateRow({
                 
                 return (
                   <SelectItem key={option.rate.id} value={option.rate.id.toString()} className="text-xs">
-                    {isBest && '⭐ '} {option.contract.contract_name}
+                    {isBest && '⭐ '}
+                    {option.isSplitStay && '🔗 '}
+                    {option.contract.contract_name}
                     {option.isBuyToOrder && ' 🟠'}
+                    {option.isSplitStay && ` (${option.splitStayBreakdown.length} rates)`}
                   </SelectItem>
                 )
               })}
@@ -319,10 +419,21 @@ function RoomRateRow({
       
       {/* Price */}
       <td className="p-3 text-right">
-        <div className="text-sm font-bold">{formatCurrency(selectedPrice.sell / selectedQty)}</div>
-        <div className="text-[10px] text-muted-foreground">
-          +{formatCurrency(selectedPrice.margin / selectedQty)} margin
-        </div>
+        {selectedRateItem?.isSplitStay ? (
+          <div>
+            <div className="text-sm font-bold">{formatCurrency(selectedPrice.sell / selectedQty)}</div>
+            <div className="text-[10px] text-primary">
+              🔗 Multi-rate ({selectedRateItem.splitStayBreakdown.length} periods)
+            </div>
+          </div>
+        ) : (
+          <div>
+            <div className="text-sm font-bold">{formatCurrency(selectedPrice.sell / selectedQty)}</div>
+            <div className="text-[10px] text-muted-foreground">
+              +{formatCurrency(selectedPrice.margin / selectedQty)} margin
+            </div>
+          </div>
+        )}
       </td>
       
       {/* Quantity */}
@@ -381,6 +492,108 @@ function RoomRateRow({
       </td>
     </tr>
   )
+}
+
+// Helper function to calculate split-stay pricing across multiple rates
+function calculateSplitStayPrice(
+  checkInDate: string,
+  checkOutDate: string,
+  ratesForRoom: Array<{ rate: Rate; contract: any }>,
+  occupancyType: OccupancyType,
+  boardType: BoardType
+): {
+  isFullyCovered: boolean
+  gaps: Array<{ start: string, end: string }>
+  breakdown: Array<{
+    rate: Rate
+    contract: any
+    dateStart: string
+    dateEnd: string
+    nights: number
+    pricePerNight: number
+    boardCostPerNight: number
+    subtotal: number
+  }>
+  totalNights: number
+  totalPrice: number
+  poolId?: string
+} {
+  const start = new Date(checkInDate)
+  const end = new Date(checkOutDate)
+  const totalNights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+  
+  // Sort rates by start date
+  const sortedRates = ratesForRoom
+    .filter(item => item.rate.occupancy_type === occupancyType && item.rate.board_type === boardType)
+    .sort((a, b) => {
+      const aStart = new Date(a.rate.valid_from || a.contract.start_date)
+      const bStart = new Date(b.rate.valid_from || b.contract.start_date)
+      return aStart.getTime() - bStart.getTime()
+    })
+  
+  const breakdown: any[] = []
+  const gaps: any[] = []
+  let currentDate = new Date(start)
+  let nightsCovered = 0
+  
+  // Build day-by-day assignment
+  for (let i = 0; i < totalNights; i++) {
+    const dateStr = currentDate.toISOString().split('T')[0]
+    
+    // Find rate covering this date
+    const applicableRateItem = sortedRates.find(item => {
+      const rateStart = new Date(item.rate.valid_from || item.contract.start_date)
+      const rateEnd = new Date(item.rate.valid_to || item.contract.end_date)
+      return currentDate >= rateStart && currentDate < rateEnd
+    })
+    
+    if (applicableRateItem) {
+      // Check if this is a continuation of previous rate or new rate
+      const lastBreakdown = breakdown[breakdown.length - 1]
+      
+      if (lastBreakdown && lastBreakdown.rate.id === applicableRateItem.rate.id) {
+        // Same rate, extend period
+        lastBreakdown.nights++
+        lastBreakdown.dateEnd = dateStr
+        lastBreakdown.subtotal = lastBreakdown.nights * (lastBreakdown.pricePerNight + lastBreakdown.boardCostPerNight)
+      } else {
+        // New rate period
+        breakdown.push({
+          rate: applicableRateItem.rate,
+          contract: applicableRateItem.contract,
+          dateStart: dateStr,
+          dateEnd: dateStr,
+          nights: 1,
+          pricePerNight: applicableRateItem.rate.rate,
+          boardCostPerNight: applicableRateItem.rate.board_cost || 0,
+          subtotal: applicableRateItem.rate.rate + (applicableRateItem.rate.board_cost || 0)
+        })
+      }
+      nightsCovered++
+    } else {
+      // Gap detected
+      if (gaps.length === 0 || gaps[gaps.length - 1].end !== dateStr) {
+        gaps.push({ start: dateStr, end: dateStr })
+      } else {
+        gaps[gaps.length - 1].end = dateStr
+      }
+    }
+    
+    currentDate.setDate(currentDate.getDate() + 1)
+  }
+  
+  const totalPrice = breakdown.reduce((sum, item) => sum + item.subtotal, 0)
+  const isFullyCovered = nightsCovered === totalNights
+  const poolId = sortedRates[0]?.rate.allocation_pool_id
+  
+  return {
+    isFullyCovered,
+    gaps,
+    breakdown,
+    totalNights,
+    totalPrice,
+    poolId
+  }
 }
 
 export function BookingsCreate() {
@@ -486,15 +699,19 @@ export function BookingsCreate() {
         const rateStart = rate.valid_from ? new Date(rate.valid_from) : new Date(contract.start_date)
         const rateEnd = rate.valid_to ? new Date(rate.valid_to) : new Date(contract.end_date)
         
-        // Booking must fall within rate's validity period
-        if (rateStart > end || rateEnd < start) return null
+        // NEW: Show rates that have ANY overlap with booking period (for split-stay support)
+        const hasOverlap = rateStart < end && rateEnd >= start
+        if (!hasOverlap) return null
         
         // Check night restrictions (rate-level overrides contract-level)
-        const rateMinNights = (rate as any).min_nights ?? contract.min_nights ?? 1
-        const rateMaxNights = (rate as any).max_nights ?? contract.max_nights ?? 365
-        const bookingNights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
-        
-        if (bookingNights < rateMinNights || bookingNights > rateMaxNights) return null
+        // Skip min/max validation if rate is part of a pool (multi-rate bookings)
+        if (!rate.allocation_pool_id) {
+          const rateMinNights = (rate as any).min_nights ?? contract.min_nights ?? 1
+          const rateMaxNights = (rate as any).max_nights ?? contract.max_nights ?? 365
+          const bookingNights = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24))
+          
+          if (bookingNights < rateMinNights || bookingNights > rateMaxNights) return null
+        }
         
         const allocation = contract.room_allocations?.find(a => a.room_group_ids.includes(rate.room_group_id))
         if (!allocation) return null
@@ -504,11 +721,20 @@ export function BookingsCreate() {
           .filter(b => b.status !== 'cancelled' && b.rooms && b.rooms.length > 0)
           .flatMap(b => b.rooms)
         
+        // 🎯 NEW: Check allocation pool for shared inventory tracking
         const bookedForAllocation = allBookedRooms
           .filter(r => {
             if (!r) return false
             
-            // Method 1: Match by rate's contract_id (for regular inventory bookings)
+            // Method 1: Match by allocation_pool_id (NEW - for multi-rate periods)
+            if (rate.allocation_pool_id && r.rate_id) {
+              const bookedRate = rates.find(rt => rt.id === r.rate_id)
+              if (bookedRate && bookedRate.allocation_pool_id === rate.allocation_pool_id) {
+                return true // Same pool = same physical rooms
+              }
+            }
+            
+            // Method 2: Match by rate's contract_id (for regular inventory bookings without pool)
             if (r.rate_id) {
               const bookedRate = rates.find(rt => rt.id === r.rate_id)
               if (bookedRate && 
@@ -518,7 +744,7 @@ export function BookingsCreate() {
               }
             }
             
-            // Method 2: Match by contractName (for converted buy-to-order bookings)
+            // Method 3: Match by contractName (for converted buy-to-order bookings)
             // This handles cases where rate_id points to old buy-to-order rate that doesn't exist
             if (r.contractName === contract.contract_name && r.purchase_type === 'inventory') {
               // Try to find room_group_id by room name
@@ -1243,6 +1469,8 @@ export function BookingsCreate() {
                                   key={idx}
                                   roomGroup={roomGroup}
                                   nights={nights}
+                                  checkInDate={checkInDate}
+                                  checkOutDate={checkOutDate}
                                   onAddToCart={(rateItem, quantity, occupancy, guestsCount) => addToCart(rateItem, quantity, occupancy, guestsCount)}
                                 />
                               ))}

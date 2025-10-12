@@ -45,9 +45,9 @@ interface NavItem {
 const navItems: NavItem[] = [
   { title: "Dashboard", icon: "dashboard", route: "/" },
   { title: "Tours", icon: "calendar", route: "/tours" },
-  { title: "Inventory Setup", icon: "warehouse", route: "/inventory" },
+  { title: "Hotels", icon: "building", route: "/hotels" },
+  { title: "Inventory Management", icon: "warehouse", route: "/inventory" },
   { title: "Service Types", icon: "package", route: "/service-providers" },
-  { title: "Service Inventory", icon: "warehouse", route: "/service-inventory" },
   { title: "Operations", icon: "clipboard-list", route: "/operations" },
   { title: "Suppliers", icon: "truck", route: "/suppliers" },
   { title: "Payments", icon: "credit-card", route: "/payments" },
