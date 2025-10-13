@@ -1,0 +1,1114 @@
+import { useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Badge } from '@/components/ui/badge'
+import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { 
+  Bed, 
+  Package, 
+  Plus, 
+  Trash2,
+  Coffee,
+  AlertTriangle,
+  Ban,
+  DollarSign,
+  FileText
+} from 'lucide-react'
+import { 
+  HotelContractMeta, 
+  HotelRoomAllocation, 
+  OccupancyRate,
+  HotelBoardType,
+  BOARD_TYPE_MAP,
+  OccupancyType
+} from './hotel-types'
+import { DayOfWeekSelector } from '@/components/ui/day-of-week-selector'
+import { recordToDaySelection, daySelectionToRecord } from '@/types/unified-inventory'
+import type { InventoryItem, UnifiedContract } from '@/types/unified-inventory'
+import type { Supplier, Tour } from '@/contexts/data-context'
+
+export interface HotelContractFormProps {
+  contract?: UnifiedContract
+  item: InventoryItem
+  suppliers: Supplier[]
+  tours: Tour[]
+  onCreateAllocations?: (contractId: string, allocationData: any[]) => void
+  onSave: (data: any) => void
+  onCancel: () => void
+}
+
+const BOARD_TYPES: HotelBoardType[] = ['bb', 'hb', 'fb', 'ai']
+const BOARD_LABELS: Record<HotelBoardType, string> = {
+  bb: 'Bed & Breakfast',
+  hb: 'Half Board',
+  fb: 'Full Board', 
+  ai: 'All Inclusive'
+}
+
+const OCCUPANCY_TYPES: OccupancyType[] = ['single', 'double', 'triple', 'quad']
+const OCCUPANCY_LABELS: Record<OccupancyType, string> = {
+  single: 'Single',
+  double: 'Double',
+  triple: 'Triple',
+  quad: 'Quad'
+}
+
+export function HotelContractFormEnhanced({ 
+  contract, 
+  item, 
+  suppliers, 
+  tours, 
+  onCreateAllocations,
+  onSave, 
+  onCancel 
+}: HotelContractFormProps) {
+  const [formData, setFormData] = useState({
+    contract_name: contract?.contract_name || '',
+    supplier_id: contract?.supplier_id?.toString() || '',
+    tour_ids: contract?.tour_ids?.map(String) || [],
+    valid_from: contract?.valid_from || '',
+    valid_to: contract?.valid_to || '',
+    description: '', // Not in UnifiedContract interface
+    days_of_week: { monday: true, tuesday: true, wednesday: true, thursday: true, friday: true, saturday: true, sunday: true },
+    
+    // Commercial
+    markup_percentage: 0, // Will be extracted from dynamic_charges
+    currency: contract?.currency || 'GBP',
+    
+    // Hotel-specific fields - these will be stored in a custom meta field
+    total_rooms: 0,
+    base_rate: 0,
+    tax_rate: 0,
+    city_tax_per_person_per_night: 0,
+    resort_fee_per_night: 0,
+    supplier_commission_rate: 0,
+    min_nights: 1,
+    max_nights: 30,
+    contracted_payment_total: 0,
+    notes: '',
+    
+    // Collections - these will be stored in a custom meta field
+    room_allocations: [] as HotelRoomAllocation[],
+    board_options: [] as Array<{ board_type: any; additional_cost: number }>,
+    attrition_stages: [] as Array<{ date: string; release_percentage: number }>,
+    cancellation_stages: [] as Array<{ date: string; penalty_percentage: number; description: string }>,
+    payment_schedule: [] as Array<{ payment_date: string; amount_due: number; paid: boolean; paid_date?: string; notes?: string }>
+  })
+
+  // Form states for adding new items
+  const [roomAllocationForm, setRoomAllocationForm] = useState({
+    room_type: '',
+    quantity: 0,
+    allocation_pool_id: '',
+    occupancy_rates: [] as OccupancyRate[]
+  })
+
+  const [boardForm, setBoardForm] = useState({
+    board_type: 'bb' as HotelBoardType,
+    additional_cost: 0
+  })
+
+  const [attritionForm, setAttritionForm] = useState({
+    date: '',
+    release_percentage: 0
+  })
+
+  const [cancellationForm, setCancellationForm] = useState({
+    date: '',
+    penalty_percentage: 0,
+    description: ''
+  })
+
+  const [paymentForm, setPaymentForm] = useState({
+    payment_date: '',
+    amount_due: 0,
+    notes: ''
+  })
+
+  const handleSave = () => {
+    const hotelMeta: HotelContractMeta = {
+      total_rooms: formData.total_rooms,
+      base_rate: formData.base_rate,
+      tax_rate: formData.tax_rate,
+      city_tax_per_person_per_night: formData.city_tax_per_person_per_night,
+      resort_fee_per_night: formData.resort_fee_per_night,
+      supplier_commission_rate: formData.supplier_commission_rate,
+      min_nights: formData.min_nights,
+      max_nights: formData.max_nights,
+      notes: formData.notes,
+      room_allocations: formData.room_allocations,
+      board_options: formData.board_options,
+      attrition_stages: formData.attrition_stages,
+      cancellation_stages: formData.cancellation_stages
+    }
+
+    const contractData = {
+      ...formData,
+      hotel_meta: hotelMeta,
+      payment_schedule: formData.payment_schedule
+    }
+
+    onSave(contractData)
+  }
+
+  const addRoomAllocation = () => {
+    if (!roomAllocationForm.room_type || roomAllocationForm.quantity <= 0) return
+    
+    const newAllocation: HotelRoomAllocation = {
+      room_type: roomAllocationForm.room_type,
+      quantity: roomAllocationForm.quantity,
+      allocation_pool_id: roomAllocationForm.allocation_pool_id,
+      occupancy_rates: roomAllocationForm.occupancy_rates
+    }
+    
+    setFormData({
+      ...formData,
+      room_allocations: [...formData.room_allocations, newAllocation]
+    })
+    
+    setRoomAllocationForm({
+      room_type: '',
+      quantity: 0,
+      allocation_pool_id: '',
+      occupancy_rates: []
+    })
+  }
+
+  const removeRoomAllocation = (index: number) => {
+    setFormData({
+      ...formData,
+      room_allocations: formData.room_allocations.filter((_, i) => i !== index)
+    })
+  }
+
+  const addOccupancyRate = (allocationIndex: number) => {
+    const newRate: OccupancyRate = {
+      occupancy_type: 'double',
+      additional_cost: 0
+    }
+    
+    const updatedAllocations = [...formData.room_allocations]
+    updatedAllocations[allocationIndex].occupancy_rates.push(newRate)
+    
+    setFormData({
+      ...formData,
+      room_allocations: updatedAllocations
+    })
+  }
+
+  const removeOccupancyRate = (allocationIndex: number, rateIndex: number) => {
+    const updatedAllocations = [...formData.room_allocations]
+    updatedAllocations[allocationIndex].occupancy_rates.splice(rateIndex, 1)
+    
+    setFormData({
+      ...formData,
+      room_allocations: updatedAllocations
+    })
+  }
+
+  const addBoardOption = () => {
+    if (boardForm.board_type && boardForm.additional_cost >= 0) {
+      const newOption = {
+        board_type: BOARD_TYPE_MAP[boardForm.board_type],
+        additional_cost: boardForm.additional_cost
+      }
+      
+      setFormData({
+        ...formData,
+        board_options: [...formData.board_options, newOption]
+      })
+      
+      setBoardForm({ board_type: 'bb', additional_cost: 0 })
+    }
+  }
+
+  const removeBoardOption = (index: number) => {
+    setFormData({
+      ...formData,
+      board_options: formData.board_options.filter((_, i) => i !== index)
+    })
+  }
+
+  const addAttritionStage = () => {
+    if (attritionForm.date && attritionForm.release_percentage >= 0) {
+      const newStage = {
+        date: attritionForm.date,
+        release_percentage: attritionForm.release_percentage / 100
+      }
+      
+      setFormData({
+        ...formData,
+        attrition_stages: [...formData.attrition_stages, newStage]
+      })
+      
+      setAttritionForm({ date: '', release_percentage: 0 })
+    }
+  }
+
+  const removeAttritionStage = (index: number) => {
+    setFormData({
+      ...formData,
+      attrition_stages: formData.attrition_stages.filter((_, i) => i !== index)
+    })
+  }
+
+  const addCancellationStage = () => {
+    if (cancellationForm.date && cancellationForm.penalty_percentage >= 0) {
+      const newStage = {
+        date: cancellationForm.date,
+        penalty_percentage: cancellationForm.penalty_percentage / 100,
+        description: cancellationForm.description
+      }
+      
+      setFormData({
+        ...formData,
+        cancellation_stages: [...formData.cancellation_stages, newStage]
+      })
+      
+      setCancellationForm({ date: '', penalty_percentage: 0, description: '' })
+    }
+  }
+
+  const removeCancellationStage = (index: number) => {
+    setFormData({
+      ...formData,
+      cancellation_stages: formData.cancellation_stages.filter((_, i) => i !== index)
+    })
+  }
+
+  const addPaymentStage = () => {
+    if (paymentForm.payment_date && paymentForm.amount_due > 0) {
+      const newPayment = {
+        payment_date: paymentForm.payment_date,
+        amount_due: paymentForm.amount_due,
+        paid: false,
+        notes: paymentForm.notes
+      }
+      
+      setFormData({
+        ...formData,
+        payment_schedule: [...formData.payment_schedule, newPayment]
+      })
+      
+      setPaymentForm({ payment_date: '', amount_due: 0, notes: '' })
+    }
+  }
+
+  const removePaymentStage = (index: number) => {
+    setFormData({
+      ...formData,
+      payment_schedule: formData.payment_schedule.filter((_, i) => i !== index)
+    })
+  }
+
+  const markPaymentPaid = (index: number) => {
+    const updatedSchedule = [...formData.payment_schedule]
+    updatedSchedule[index] = {
+      ...updatedSchedule[index],
+      paid: true,
+      paid_date: new Date().toISOString().split('T')[0]
+    }
+    setFormData({ ...formData, payment_schedule: updatedSchedule })
+  }
+
+  const handleCreateAllocations = () => {
+    if (onCreateAllocations && formData.room_allocations.length > 0) {
+      const allocationData = formData.room_allocations.map(allocation => ({
+        label: `${allocation.room_type} - ${allocation.quantity} rooms`,
+        quantity: allocation.quantity,
+        category_ids: item.categories.map(cat => cat.id),
+        allocation_pool_id: allocation.allocation_pool_id,
+        valid_from: formData.valid_from,
+        valid_to: formData.valid_to,
+        description: `Hotel room allocation for ${allocation.room_type}`
+      }))
+      
+      onCreateAllocations(contract?.id?.toString() || 'new', allocationData)
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">
+          {contract ? 'Edit Hotel Contract' : 'Create Hotel Contract'}
+        </h2>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave}>
+            Save Contract
+          </Button>
+        </div>
+      </div>
+
+      <Accordion type="multiple" defaultValue={["basics", "commercial", "hotel-details", "allocations", "board", "attrition", "payments", "cancellation"]}>
+        {/* Basics */}
+        <AccordionItem value="basics">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4" />
+              Contract Basics
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="contract_name">Contract Name</Label>
+                  <Input
+                    id="contract_name"
+                    value={formData.contract_name}
+                    onChange={(e) => setFormData({ ...formData, contract_name: e.target.value })}
+                    placeholder="e.g., Summer 2024 Hotel Contract"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="supplier">Supplier</Label>
+                  <Select
+                    value={formData.supplier_id}
+                    onValueChange={(value) => setFormData({ ...formData, supplier_id: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select supplier" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {suppliers.map((supplier) => (
+                        <SelectItem key={supplier.id} value={supplier.id.toString()}>
+                          {supplier.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Valid From</Label>
+                  <Input
+                    type="date"
+                    value={formData.valid_from}
+                    onChange={(e) => setFormData({ ...formData, valid_from: e.target.value })}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Valid To</Label>
+                  <Input
+                    type="date"
+                    value={formData.valid_to}
+                    onChange={(e) => setFormData({ ...formData, valid_to: e.target.value })}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Tours</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {tours.map((tour) => (
+                    <div key={tour.id} className="flex items-center space-x-2">
+                      <Checkbox
+                        id={`tour-${tour.id}`}
+                        checked={formData.tour_ids.includes(tour.id.toString())}
+                        onCheckedChange={(checked) => {
+                          if (checked) {
+                            setFormData({
+                              ...formData,
+                              tour_ids: [...formData.tour_ids, tour.id.toString()]
+                            })
+                          } else {
+                            setFormData({
+                              ...formData,
+                              tour_ids: formData.tour_ids.filter(id => id !== tour.id.toString())
+                            })
+                          }
+                        }}
+                      />
+                      <Label htmlFor={`tour-${tour.id}`} className="text-sm">
+                        {tour.tour_name}
+                      </Label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Valid Days</Label>
+                <DayOfWeekSelector
+                  value={recordToDaySelection(formData.days_of_week)}
+                  onChange={(days) => setFormData({ ...formData, days_of_week: daySelectionToRecord(days) })}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="description">Description</Label>
+                <Textarea
+                  id="description"
+                  value={formData.description}
+                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                  placeholder="Contract details, special terms, etc."
+                  rows={3}
+                />
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Commercial */}
+        <AccordionItem value="commercial">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Commercial Terms
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="markup_percentage">Markup Percentage</Label>
+                  <Input
+                    id="markup_percentage"
+                    type="number"
+                    step="0.1"
+                    value={formData.markup_percentage}
+                    onChange={(e) => setFormData({ ...formData, markup_percentage: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 25.5"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="currency">Currency</Label>
+                  <Select
+                    value={formData.currency}
+                    onValueChange={(value) => setFormData({ ...formData, currency: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="GBP">GBP</SelectItem>
+                      <SelectItem value="EUR">EUR</SelectItem>
+                      <SelectItem value="USD">USD</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Hotel Details */}
+        <AccordionItem value="hotel-details">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <Bed className="h-4 w-4" />
+              Hotel Contract Details
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="total_rooms">Total Rooms</Label>
+                  <Input
+                    id="total_rooms"
+                    type="number"
+                    value={formData.total_rooms}
+                    onChange={(e) => setFormData({ ...formData, total_rooms: parseInt(e.target.value) || 0 })}
+                    placeholder="e.g., 50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="base_rate">Base Rate</Label>
+                  <Input
+                    id="base_rate"
+                    type="number"
+                    step="0.01"
+                    value={formData.base_rate}
+                    onChange={(e) => setFormData({ ...formData, base_rate: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 120.00"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="currency">Currency</Label>
+                  <Select
+                    value={formData.currency}
+                    onValueChange={(value) => setFormData({ ...formData, currency: value })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="GBP">GBP</SelectItem>
+                      <SelectItem value="EUR">EUR</SelectItem>
+                      <SelectItem value="USD">USD</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="tax_rate">Tax Rate (%)</Label>
+                  <Input
+                    id="tax_rate"
+                    type="number"
+                    step="0.1"
+                    value={formData.tax_rate}
+                    onChange={(e) => setFormData({ ...formData, tax_rate: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 10.0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="city_tax">City Tax (per person/night)</Label>
+                  <Input
+                    id="city_tax"
+                    type="number"
+                    step="0.01"
+                    value={formData.city_tax_per_person_per_night}
+                    onChange={(e) => setFormData({ ...formData, city_tax_per_person_per_night: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 2.50"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="resort_fee">Resort Fee (per night)</Label>
+                  <Input
+                    id="resort_fee"
+                    type="number"
+                    step="0.01"
+                    value={formData.resort_fee_per_night}
+                    onChange={(e) => setFormData({ ...formData, resort_fee_per_night: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 15.00"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="commission">Supplier Commission (%)</Label>
+                  <Input
+                    id="commission"
+                    type="number"
+                    step="0.1"
+                    value={formData.supplier_commission_rate}
+                    onChange={(e) => setFormData({ ...formData, supplier_commission_rate: parseFloat(e.target.value) || 0 })}
+                    placeholder="e.g., 5.0"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="min_nights">Min Nights</Label>
+                  <Input
+                    id="min_nights"
+                    type="number"
+                    value={formData.min_nights}
+                    onChange={(e) => setFormData({ ...formData, min_nights: parseInt(e.target.value) || 1 })}
+                    placeholder="e.g., 2"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="max_nights">Max Nights</Label>
+                  <Input
+                    id="max_nights"
+                    type="number"
+                    value={formData.max_nights}
+                    onChange={(e) => setFormData({ ...formData, max_nights: parseInt(e.target.value) || 30 })}
+                    placeholder="e.g., 14"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="contracted_total">Contracted Payment Total</Label>
+                <Input
+                  id="contracted_total"
+                  type="number"
+                  step="0.01"
+                  value={formData.contracted_payment_total}
+                  onChange={(e) => setFormData({ ...formData, contracted_payment_total: parseFloat(e.target.value) || 0 })}
+                  placeholder="e.g., 12000"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Total amount you're contracted to pay the hotel
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="notes">Contract Notes</Label>
+                <Textarea
+                  id="notes"
+                  value={formData.notes}
+                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                  placeholder="Special terms, conditions, notes..."
+                  rows={3}
+                />
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Room Allocations */}
+        <AccordionItem value="allocations">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <Package className="h-4 w-4" />
+              Room Allocations
+              {formData.room_allocations.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{formData.room_allocations.length}</Badge>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Define room types and quantities allocated for this contract
+              </p>
+
+              {formData.room_allocations.length > 0 && (
+                <div className="space-y-3">
+                  {formData.room_allocations.map((allocation, index) => (
+                    <div key={index} className="p-4 border rounded-lg bg-muted/30">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-3">
+                          <Badge variant="outline">{allocation.room_type}</Badge>
+                          <span className="font-medium">{allocation.quantity} rooms</span>
+                          <span className="text-sm text-muted-foreground">Pool: {allocation.allocation_pool_id}</span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeRoomAllocation(index)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">Occupancy Rates</Label>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => addOccupancyRate(index)}
+                          >
+                            <Plus className="h-4 w-4 mr-1" />
+                            Add Rate
+                          </Button>
+                        </div>
+
+                        {allocation.occupancy_rates.map((rate, rateIndex) => (
+                          <div key={rateIndex} className="flex items-center gap-2 p-2 bg-background rounded border">
+                            <Select
+                              value={rate.occupancy_type}
+                              onValueChange={(value: OccupancyType) => {
+                                const updatedAllocations = [...formData.room_allocations]
+                                updatedAllocations[index].occupancy_rates[rateIndex].occupancy_type = value
+                                setFormData({ ...formData, room_allocations: updatedAllocations })
+                              }}
+                            >
+                              <SelectTrigger className="w-32">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {OCCUPANCY_TYPES.map((type) => (
+                                  <SelectItem key={type} value={type}>
+                                    {OCCUPANCY_LABELS[type]}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder="Additional cost"
+                              value={rate.additional_cost || ''}
+                              onChange={(e) => {
+                                const updatedAllocations = [...formData.room_allocations]
+                                updatedAllocations[index].occupancy_rates[rateIndex].additional_cost = parseFloat(e.target.value) || 0
+                                setFormData({ ...formData, room_allocations: updatedAllocations })
+                              }}
+                              className="flex-1"
+                            />
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => removeOccupancyRate(index, rateIndex)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  placeholder="Room Type"
+                  value={roomAllocationForm.room_type}
+                  onChange={(e) => setRoomAllocationForm({ ...roomAllocationForm, room_type: e.target.value })}
+                />
+                <Input
+                  type="number"
+                  placeholder="Quantity"
+                  value={roomAllocationForm.quantity || ''}
+                  onChange={(e) => setRoomAllocationForm({ ...roomAllocationForm, quantity: parseInt(e.target.value) || 0 })}
+                />
+                <Input
+                  placeholder="Pool ID"
+                  value={roomAllocationForm.allocation_pool_id}
+                  onChange={(e) => setRoomAllocationForm({ ...roomAllocationForm, allocation_pool_id: e.target.value })}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addRoomAllocation}
+                disabled={!roomAllocationForm.room_type || roomAllocationForm.quantity <= 0}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Room Allocation
+              </Button>
+
+              {formData.room_allocations.length > 0 && onCreateAllocations && (
+                <div className="pt-4 border-t">
+                  <Button
+                    type="button"
+                    onClick={handleCreateAllocations}
+                    className="w-full"
+                  >
+                    Generate Allocations for Contract
+                  </Button>
+                </div>
+              )}
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Board Options */}
+        <AccordionItem value="board">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <Coffee className="h-4 w-4" />
+              Board/Meal Options
+              {formData.board_options.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{formData.board_options.length}</Badge>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              {formData.board_options.length > 0 && (
+                <div className="space-y-2">
+                  {formData.board_options.map((option, index) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-muted rounded-md border">
+                      <div className="flex items-center gap-3">
+                        <Badge>{BOARD_LABELS[Object.keys(BOARD_LABELS).find(key => BOARD_TYPE_MAP[key as HotelBoardType] === option.board_type) as HotelBoardType]}</Badge>
+                        <span className="text-sm font-medium">
+                          +{option.additional_cost} {formData.currency}
+                        </span>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeBoardOption(index)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Select
+                  value={boardForm.board_type}
+                  onValueChange={(value: HotelBoardType) => setBoardForm({ ...boardForm, board_type: value })}
+                >
+                  <SelectTrigger className="w-[200px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BOARD_TYPES.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {BOARD_LABELS[type]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="Additional cost"
+                  value={boardForm.additional_cost || ''}
+                  onChange={(e) => setBoardForm({ ...boardForm, additional_cost: parseFloat(e.target.value) || 0 })}
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addBoardOption}
+                >
+                  <Plus className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Attrition */}
+        <AccordionItem value="attrition">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Attrition & Room Release
+              {formData.attrition_stages.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{formData.attrition_stages.length}</Badge>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              <p className="text-sm text-muted-foreground">
+                Define dates when you can reduce room commitments
+              </p>
+
+              {formData.attrition_stages.length > 0 && (
+                <div className="space-y-2">
+                  {formData.attrition_stages.map((stage, index) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-orange-50 dark:bg-orange-950/30 rounded-md border border-orange-200">
+                      <div className="flex-1 text-sm">
+                        <div className="flex items-center gap-3">
+                          <Badge variant="outline">{stage.date}</Badge>
+                          <span className="font-medium">Release {(stage.release_percentage * 100).toFixed(0)}%</span>
+                          {formData.total_rooms > 0 && (
+                            <span className="text-muted-foreground">
+                              (≈{Math.floor(formData.total_rooms * stage.release_percentage)} rooms)
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeAttritionStage(index)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <Input
+                  type="date"
+                  placeholder="Release Date"
+                  value={attritionForm.date}
+                  onChange={(e) => setAttritionForm({ ...attritionForm, date: e.target.value })}
+                />
+                <Input
+                  type="number"
+                  step="1"
+                  placeholder="Release %"
+                  value={attritionForm.release_percentage || ''}
+                  onChange={(e) => setAttritionForm({ ...attritionForm, release_percentage: parseFloat(e.target.value) || 0 })}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addAttritionStage}
+                disabled={!attritionForm.date || attritionForm.release_percentage < 0}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Attrition Stage
+              </Button>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Payments */}
+        <AccordionItem value="payments">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <DollarSign className="h-4 w-4" />
+              Payment Schedule
+              {formData.payment_schedule.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{formData.payment_schedule.length}</Badge>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              {formData.payment_schedule.length > 0 && (
+                <div className="space-y-2">
+                  {formData.payment_schedule.map((payment, index) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-green-50 dark:bg-green-950/30 rounded-md border border-green-200">
+                      <div className="flex items-center gap-3 flex-1">
+                        <Badge variant={payment.paid ? "default" : "outline"}>
+                          {payment.payment_date}
+                        </Badge>
+                        <span className="font-medium">{payment.amount_due} {formData.currency}</span>
+                        {payment.paid && payment.paid_date && (
+                          <span className="text-xs text-green-600">Paid {payment.paid_date}</span>
+                        )}
+                        {payment.notes && (
+                          <span className="text-xs text-muted-foreground">{payment.notes}</span>
+                        )}
+                      </div>
+                      <div className="flex gap-1">
+                        {!payment.paid && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => markPaymentPaid(index)}
+                          >
+                            Mark Paid
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removePaymentStage(index)}
+                        >
+                          <Ban className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  type="date"
+                  placeholder="Payment Date"
+                  value={paymentForm.payment_date}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, payment_date: e.target.value })}
+                />
+                <Input
+                  type="number"
+                  step="0.01"
+                  placeholder="Amount Due"
+                  value={paymentForm.amount_due || ''}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, amount_due: parseFloat(e.target.value) || 0 })}
+                />
+                <Input
+                  placeholder="Notes"
+                  value={paymentForm.notes}
+                  onChange={(e) => setPaymentForm({ ...paymentForm, notes: e.target.value })}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addPaymentStage}
+                disabled={!paymentForm.payment_date || paymentForm.amount_due <= 0}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Payment Stage
+              </Button>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+
+        {/* Cancellation */}
+        <AccordionItem value="cancellation">
+          <AccordionTrigger className="text-sm font-semibold hover:no-underline">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Cancellation Policy
+              {formData.cancellation_stages.length > 0 && (
+                <Badge variant="secondary" className="ml-2">{formData.cancellation_stages.length}</Badge>
+              )}
+            </div>
+          </AccordionTrigger>
+          <AccordionContent>
+            <div className="space-y-4 pt-2">
+              {formData.cancellation_stages.length > 0 && (
+                <div className="space-y-2">
+                  {formData.cancellation_stages.map((stage, index) => (
+                    <div key={index} className="flex items-center justify-between p-3 bg-red-50 dark:bg-red-950/30 rounded-md border border-red-200">
+                      <div className="flex-1 text-sm">
+                        <div className="flex items-center gap-3">
+                          <Badge variant="outline">{stage.date}</Badge>
+                          <span className="font-medium">{(stage.penalty_percentage * 100).toFixed(0)}% penalty</span>
+                          {stage.description && (
+                            <span className="text-muted-foreground">{stage.description}</span>
+                          )}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeCancellationStage(index)}
+                      >
+                        <Ban className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-2">
+                <Input
+                  type="date"
+                  placeholder="Cancellation Date"
+                  value={cancellationForm.date}
+                  onChange={(e) => setCancellationForm({ ...cancellationForm, date: e.target.value })}
+                />
+                <Input
+                  type="number"
+                  step="0.1"
+                  placeholder="Penalty %"
+                  value={cancellationForm.penalty_percentage || ''}
+                  onChange={(e) => setCancellationForm({ ...cancellationForm, penalty_percentage: parseFloat(e.target.value) || 0 })}
+                />
+                <Input
+                  placeholder="Description"
+                  value={cancellationForm.description}
+                  onChange={(e) => setCancellationForm({ ...cancellationForm, description: e.target.value })}
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={addCancellationStage}
+                disabled={!cancellationForm.date || cancellationForm.penalty_percentage < 0}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Cancellation Stage
+              </Button>
+            </div>
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </div>
+  )
+}

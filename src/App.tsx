@@ -18,6 +18,11 @@ import { Suppliers } from '@/pages/suppliers'
 import { Payments } from '@/pages/payments'
 import { Reports } from '@/pages/reports'
 
+// NEW: Unified Inventory System
+import { UnifiedInventory } from '@/pages/unified-inventory'
+import { UnifiedInventoryRedesigned } from '@/pages/unified-inventory-redesigned'
+import { AllocationManagement } from '@/pages/allocation-management'
+
 function App() {
   return (
     <ThemeProvider defaultTheme="light" storageKey="tours-inventory-theme">
@@ -29,6 +34,9 @@ function App() {
               <Route path="tours" element={<Tours />} />
 
               <Route path="inventory" element={<InventoryManagement />} />
+              <Route path="unified-inventory" element={<UnifiedInventoryRedesigned />} />
+              <Route path="unified-inventory-old" element={<UnifiedInventory />} />
+              <Route path="allocation-management" element={<AllocationManagement />} />
               <Route path="service-providers" element={<ServiceProviders />} />
               <Route path="hotels" element={<Hotels />} />
               <Route path="operations" element={<Operations />} />

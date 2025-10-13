@@ -1,4 +1,13 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react'
+import type {
+  InventoryItem,
+  UnifiedContract,
+  UnifiedRate,
+  Allocation,
+  AllocationPoolCapacity,
+  PoolBooking,
+  RateCapacitySettings,
+} from '@/types/unified-inventory'
 
 // Types
 export interface TourComponent {
@@ -623,6 +632,42 @@ interface DataContextType {
   convertBuyToOrderBooking: (bookingId: number, contractId: number, notes?: string) => void
   convertBuyToOrderRoom: (bookingId: number, roomIndex: number, contractId: number, notes?: string) => boolean
   getConversionHistory: () => ConversionHistory[]
+  
+  // NEW: Unified Inventory System
+  inventoryItems: InventoryItem[]
+  addInventoryItem: (item: Omit<InventoryItem, 'id' | 'created_at'>) => InventoryItem
+  updateInventoryItem: (id: number, updates: Partial<InventoryItem>) => void
+  deleteInventoryItem: (id: number) => void
+  unifiedContracts: UnifiedContract[]
+  addUnifiedContract: (contract: Omit<UnifiedContract, 'id' | 'itemName' | 'supplierName' | 'item_type' | 'tourNames' | 'created_at'>) => UnifiedContract
+  updateUnifiedContract: (id: number, updates: Partial<UnifiedContract>) => void
+  deleteUnifiedContract: (id: number) => void
+  unifiedRates: UnifiedRate[]
+  addUnifiedRate: (rate: Omit<UnifiedRate, 'id' | 'selling_price' | 'itemName' | 'categoryName' | 'contractName' | 'item_type' | 'tourName' | 'created_at'>) => UnifiedRate
+  updateUnifiedRate: (id: number, updates: Partial<UnifiedRate>) => void
+  deleteUnifiedRate: (id: number) => void
+  
+  // NEW: Standalone allocations
+  allocations: Allocation[]
+  setAllocations: (allocations: Allocation[]) => void
+  addAllocation: (allocation: Omit<Allocation, 'id' | 'itemName' | 'supplierName' | 'contractName' | 'tourNames' | 'created_at'>) => Allocation
+  updateAllocation: (id: number, updates: Partial<Allocation>) => void
+  deleteAllocation: (id: number) => void
+  
+  // NEW: Pool-centric capacity management
+  allocationPoolCapacity: AllocationPoolCapacity[]
+  setAllocationPoolCapacity: (pools: AllocationPoolCapacity[]) => void
+  addAllocationPoolCapacity: (pool: Omit<AllocationPoolCapacity, 'id' | 'last_updated'>) => AllocationPoolCapacity
+  updateAllocationPoolCapacity: (poolId: string, updates: Partial<AllocationPoolCapacity>) => void
+  deleteAllocationPoolCapacity: (poolId: string) => void
+  poolBookings: PoolBooking[]
+  addPoolBooking: (booking: Omit<PoolBooking, 'id' | 'created_at' | 'updated_at'>) => PoolBooking
+  updatePoolBooking: (id: string, updates: Partial<PoolBooking>) => void
+  deletePoolBooking: (id: string) => void
+  rateCapacitySettings: RateCapacitySettings[]
+  addRateCapacitySettings: (settings: Omit<RateCapacitySettings, 'id'>) => RateCapacitySettings
+  updateRateCapacitySettings: (rateId: number, updates: Partial<RateCapacitySettings>) => void
+  deleteRateCapacitySettings: (rateId: number) => void
 }
 
 export interface ConversionCandidate {
@@ -1809,6 +1854,15 @@ const STORAGE_KEYS = {
   serviceInventoryTypes: 'tours-inventory-service-inventory-types',
   serviceContracts: 'tours-inventory-service-contracts',
   serviceRates: 'tours-inventory-service-rates',
+  // NEW: Unified inventory system
+  inventoryItems: 'tours-inventory-unified-items',
+  unifiedContracts: 'tours-inventory-unified-contracts',
+  unifiedRates: 'tours-inventory-unified-rates',
+  allocations: 'tours-inventory-allocations',
+  // NEW: Pool-centric capacity management
+  allocationPoolCapacity: 'tours-inventory-pool-capacity',
+  poolBookings: 'tours-inventory-pool-bookings',
+  rateCapacitySettings: 'tours-inventory-rate-capacity-settings',
 }
 
 // Load from localStorage with fallback
@@ -1847,6 +1901,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [serviceRates, setServiceRatesState] = useState<ServiceRate[]>(() => loadFromStorage(STORAGE_KEYS.serviceRates, initialData.serviceRates))
   const [conversionHistory, setConversionHistory] = useState<ConversionHistory[]>([])
   const [tourComponents, setTourComponentsState] = useState<TourComponent[]>(() => loadFromStorage('tourComponents', initialData.tourComponents))
+  
+  // NEW: Unified inventory system state
+  const [inventoryItems, setInventoryItemsState] = useState<InventoryItem[]>(() => loadFromStorage(STORAGE_KEYS.inventoryItems, []))
+  const [unifiedContracts, setUnifiedContractsState] = useState<UnifiedContract[]>(() => loadFromStorage(STORAGE_KEYS.unifiedContracts, []))
+  const [unifiedRates, setUnifiedRatesState] = useState<UnifiedRate[]>(() => loadFromStorage(STORAGE_KEYS.unifiedRates, []))
+  const [allocations, setAllocationsState] = useState<Allocation[]>(() => loadFromStorage(STORAGE_KEYS.allocations, []))
+  
+  // NEW: Pool-centric capacity management state
+  const [allocationPoolCapacity, setAllocationPoolCapacityState] = useState<AllocationPoolCapacity[]>(() => loadFromStorage(STORAGE_KEYS.allocationPoolCapacity, []))
+  const [poolBookings, setPoolBookingsState] = useState<PoolBooking[]>(() => loadFromStorage(STORAGE_KEYS.poolBookings, []))
+  const [rateCapacitySettings, setRateCapacitySettingsState] = useState<RateCapacitySettings[]>(() => loadFromStorage(STORAGE_KEYS.rateCapacitySettings, []))
 
   // Fix existing rates that are missing roomName or hotelName (migration)
   useEffect(() => {
@@ -1985,6 +2050,399 @@ export function DataProvider({ children }: { children: ReactNode }) {
       saveToStorage('tourComponents', next)
       return next
     })
+  }
+
+  // NEW: Unified inventory wrapper functions
+  const setInventoryItems = (data: InventoryItem[] | ((prev: InventoryItem[]) => InventoryItem[])) => {
+    setInventoryItemsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.inventoryItems, next)
+      return next
+    })
+  }
+
+  const setUnifiedContracts = (data: UnifiedContract[] | ((prev: UnifiedContract[]) => UnifiedContract[])) => {
+    setUnifiedContractsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.unifiedContracts, next)
+      return next
+    })
+  }
+
+  const setUnifiedRates = (data: UnifiedRate[] | ((prev: UnifiedRate[]) => UnifiedRate[])) => {
+    setUnifiedRatesState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.unifiedRates, next)
+      return next
+    })
+  }
+
+  const setAllocations = (data: Allocation[] | ((prev: Allocation[]) => Allocation[])) => {
+    setAllocationsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.allocations, next)
+      return next
+    })
+  }
+
+  // NEW: Pool-centric capacity management setters
+  const setAllocationPoolCapacity = (data: AllocationPoolCapacity[] | ((prev: AllocationPoolCapacity[]) => AllocationPoolCapacity[])) => {
+    setAllocationPoolCapacityState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.allocationPoolCapacity, next)
+      return next
+    })
+  }
+
+  const setPoolBookings = (data: PoolBooking[] | ((prev: PoolBooking[]) => PoolBooking[])) => {
+    setPoolBookingsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.poolBookings, next)
+      return next
+    })
+  }
+
+  const setRateCapacitySettings = (data: RateCapacitySettings[] | ((prev: RateCapacitySettings[]) => RateCapacitySettings[])) => {
+    setRateCapacitySettingsState(prev => {
+      const next = typeof data === 'function' ? data(prev) : data
+      saveToStorage(STORAGE_KEYS.rateCapacitySettings, next)
+      return next
+    })
+  }
+
+  // ============================================================================
+  // UNIFIED INVENTORY CRUD METHODS
+  // ============================================================================
+
+  // Inventory Item CRUD
+  const addInventoryItem = (itemData: Omit<InventoryItem, 'id' | 'created_at'>) => {
+    const newId = Math.max(...inventoryItems.map(i => i.id), 0) + 1
+    
+    const newItem: InventoryItem = {
+      ...itemData,
+      id: newId,
+      created_at: new Date().toISOString(),
+      active: itemData.active !== undefined ? itemData.active : true,
+      // Fix: Ensure all categories have correct item_id
+      categories: itemData.categories.map(cat => ({
+        ...cat,
+        item_id: newId
+      }))
+    }
+    
+    setInventoryItems([...inventoryItems, newItem])
+    console.log(`✅ Created ${newItem.item_type} inventory item:`, newItem.name)
+    return newItem
+  }
+
+  const updateInventoryItem = (id: number, updates: Partial<InventoryItem>) => {
+    setInventoryItems(prevItems =>
+      prevItems.map(item =>
+        item.id === id
+          ? { ...item, ...updates, updated_at: new Date().toISOString() }
+          : item
+      )
+    )
+    console.log(`✅ Updated inventory item:`, id)
+  }
+
+  const deleteInventoryItem = (id: number) => {
+    const item = inventoryItems.find(i => i.id === id)
+    
+    // Check for dependencies
+    const hasContracts = unifiedContracts.some(c => c.item_id === id)
+    if (hasContracts) {
+      throw new Error('Cannot delete inventory item with existing contracts')
+    }
+    
+    setInventoryItems(prevItems => prevItems.filter(i => i.id !== id))
+    console.log(`🗑️ Deleted ${item?.item_type} inventory item:`, item?.name)
+  }
+
+  // Unified Contract CRUD
+  const addUnifiedContract = (contractData: Omit<UnifiedContract, 'id' | 'itemName' | 'supplierName' | 'item_type' | 'tourNames' | 'created_at'>) => {
+    const item = inventoryItems.find(i => i.id === contractData.item_id)
+    const supplier = suppliers.find(s => s.id === contractData.supplier_id)
+    const tourNames = contractData.tour_ids?.map(tourId => 
+      tours.find(t => t.id === tourId)?.name || ''
+    ).filter(Boolean)
+    
+    const newContract: UnifiedContract = {
+      ...contractData,
+      id: Math.max(...unifiedContracts.map(c => c.id), 0) + 1,
+      itemName: item?.name || '',
+      supplierName: supplier?.name || '',
+      item_type: item?.item_type || 'other',
+      tourNames,
+      created_at: new Date().toISOString(),
+      active: contractData.active !== undefined ? contractData.active : true
+    }
+    
+    setUnifiedContracts([...unifiedContracts, newContract])
+    console.log(`✅ Created ${newContract.item_type} contract:`, newContract.contract_name)
+    return newContract
+  }
+
+  const updateUnifiedContract = (id: number, updates: Partial<UnifiedContract>) => {
+    setUnifiedContracts(prevContracts =>
+      prevContracts.map(contract => {
+        if (contract.id !== id) return contract
+        
+        // Update denormalized fields if references changed
+        const item = updates.item_id ? inventoryItems.find(i => i.id === updates.item_id) : undefined
+        const supplier = updates.supplier_id ? suppliers.find(s => s.id === updates.supplier_id) : undefined
+        const tourNames = updates.tour_ids?.map(tourId =>
+          tours.find(t => t.id === tourId)?.name || ''
+        ).filter(Boolean)
+        
+        return {
+          ...contract,
+          ...updates,
+          ...(item && { itemName: item.name, item_type: item.item_type }),
+          ...(supplier && { supplierName: supplier.name }),
+          ...(tourNames && { tourNames }),
+          updated_at: new Date().toISOString()
+        }
+      })
+    )
+    console.log(`✅ Updated unified contract:`, id)
+  }
+
+  const deleteUnifiedContract = (id: number) => {
+    const contract = unifiedContracts.find(c => c.id === id)
+    
+    // Check for dependencies
+    const hasRates = unifiedRates.some(r => r.contract_id === id)
+    if (hasRates) {
+      throw new Error('Cannot delete contract with existing rates')
+    }
+    
+    setUnifiedContracts(prevContracts => prevContracts.filter(c => c.id !== id))
+    console.log(`🗑️ Deleted unified contract:`, contract?.contract_name)
+  }
+
+  // Unified Rate CRUD
+  const addUnifiedRate = (rateData: Omit<UnifiedRate, 'id' | 'selling_price' | 'itemName' | 'categoryName' | 'contractName' | 'item_type' | 'tourName' | 'created_at'>) => {
+    const item = inventoryItems.find(i => i.id === rateData.item_id)
+    const contract = rateData.contract_id
+      ? unifiedContracts.find(c => c.id === rateData.contract_id)
+      : undefined
+    const category = item?.categories.find(c => c.id === rateData.category_id)
+    const tour = rateData.tour_id ? tours.find(t => t.id === rateData.tour_id) : undefined
+    
+    // Calculate selling price
+    const sellingPrice = rateData.base_rate * (1 + (rateData.markup_percentage || 0))
+    
+    const newRate: UnifiedRate = {
+      ...rateData,
+      id: Math.max(...unifiedRates.map(r => r.id), 0) + 1,
+      selling_price: sellingPrice,
+      itemName: item?.name || '',
+      categoryName: category?.category_name || '',
+      contractName: contract?.contract_name,
+      item_type: item?.item_type || 'other',
+      tourName: tour?.name,
+      created_at: new Date().toISOString(),
+      active: rateData.active !== undefined ? rateData.active : true
+    }
+    
+    setUnifiedRates([...unifiedRates, newRate])
+    console.log(`✅ Created ${newRate.item_type} rate for ${newRate.categoryName} @ ${newRate.currency} ${newRate.base_rate}`)
+    return newRate
+  }
+
+  const updateUnifiedRate = (id: number, updates: Partial<UnifiedRate>) => {
+    setUnifiedRates(prevRates =>
+      prevRates.map(rate => {
+        if (rate.id !== id) return rate
+        
+        const updated = { ...rate, ...updates, updated_at: new Date().toISOString() }
+        
+        // Recalculate selling price if base_rate or markup changed
+        if (updates.base_rate !== undefined || updates.markup_percentage !== undefined) {
+          updated.selling_price = updated.base_rate * (1 + (updated.markup_percentage || 0))
+        }
+        
+        // Update denormalized fields if references changed
+        const item = updates.item_id ? inventoryItems.find(i => i.id === updates.item_id) : undefined
+        const contract = updates.contract_id ? unifiedContracts.find(c => c.id === updates.contract_id) : undefined
+        const category = item?.categories.find(c => c.id === (updates.category_id || rate.category_id))
+        const tour = updates.tour_id ? tours.find(t => t.id === updates.tour_id) : undefined
+        
+        if (item) {
+          updated.itemName = item.name
+          updated.item_type = item.item_type
+        }
+        if (contract) {
+          updated.contractName = contract.contract_name
+        }
+        if (category) {
+          updated.categoryName = category.category_name
+        }
+        if (tour) {
+          updated.tourName = tour.name
+        }
+        
+        return updated
+      })
+    )
+    console.log(`✅ Updated unified rate:`, id)
+  }
+
+  const deleteUnifiedRate = (id: number) => {
+    const rate = unifiedRates.find(r => r.id === id)
+    setUnifiedRates(prevRates => prevRates.filter(r => r.id !== id))
+    console.log(`🗑️ Deleted ${rate?.item_type} rate:`, rate?.categoryName)
+  }
+
+  // ============================================================================
+  // ALLOCATION CRUD METHODS
+  // ============================================================================
+
+  const addAllocation = (allocationData: Omit<Allocation, 'id' | 'itemName' | 'supplierName' | 'contractName' | 'tourNames' | 'created_at'>) => {
+    const item = inventoryItems.find(i => i.id === allocationData.item_id)
+    const supplier = suppliers.find(s => s.id === allocationData.supplier_id)
+    const contract = allocationData.contract_id ? unifiedContracts.find(c => c.id === allocationData.contract_id) : null
+    const tourNames = allocationData.tour_ids?.map(tourId => 
+      tours.find(t => t.id === tourId)?.name || ''
+    ).filter(Boolean)
+    
+    const newAllocation: Allocation = {
+      ...allocationData,
+      id: Math.max(...allocations.map(a => a.id), 0) + 1,
+      itemName: item?.name || '',
+      supplierName: supplier?.name || '',
+      contractName: contract?.contract_name || '',
+      tourNames,
+      created_at: new Date().toISOString(),
+      active: allocationData.active !== undefined ? allocationData.active : true
+    }
+    
+    setAllocations([...allocations, newAllocation])
+    console.log(`✅ Created allocation:`, newAllocation.label)
+    return newAllocation
+  }
+
+  const updateAllocation = (id: number, updates: Partial<Allocation>) => {
+    setAllocations(prevAllocations =>
+      prevAllocations.map(allocation => {
+        if (allocation.id !== id) return allocation
+        
+        // Update denormalized fields if references changed
+        const item = inventoryItems.find(i => i.id === (updates.item_id || allocation.item_id))
+        const supplier = suppliers.find(s => s.id === (updates.supplier_id || allocation.supplier_id))
+        const contract = (updates.contract_id || allocation.contract_id) ? 
+          unifiedContracts.find(c => c.id === (updates.contract_id || allocation.contract_id)) : null
+        const tourNames = (updates.tour_ids || allocation.tour_ids)?.map(tourId => 
+          tours.find(t => t.id === tourId)?.name || ''
+        ).filter(Boolean)
+        
+        return {
+          ...allocation,
+          ...updates,
+          itemName: item?.name || allocation.itemName,
+          supplierName: supplier?.name || allocation.supplierName,
+          contractName: contract?.contract_name || allocation.contractName,
+          tourNames,
+          updated_at: new Date().toISOString()
+        }
+      })
+    )
+    console.log(`✅ Updated allocation:`, id)
+  }
+
+  const deleteAllocation = (id: number) => {
+    const allocation = allocations.find(a => a.id === id)
+    setAllocations(prevAllocations => prevAllocations.filter(a => a.id !== id))
+    console.log(`🗑️ Deleted allocation:`, allocation?.label)
+  }
+
+  // ============================================================================
+  // POOL CAPACITY MANAGEMENT CRUD METHODS
+  // ============================================================================
+
+  // AllocationPoolCapacity CRUD
+  const addAllocationPoolCapacity = (poolData: Omit<AllocationPoolCapacity, 'last_updated'>) => {
+    const newPool: AllocationPoolCapacity = {
+      ...poolData,
+      last_updated: new Date().toISOString()
+    }
+    setAllocationPoolCapacity(prev => [...prev, newPool])
+    console.log(`✅ Created pool capacity: ${newPool.pool_id}`)
+    return newPool
+  }
+
+  const updateAllocationPoolCapacity = (poolId: string, updates: Partial<AllocationPoolCapacity>) => {
+    setAllocationPoolCapacity(prevPools =>
+      prevPools.map(pool => {
+        if (pool.pool_id !== poolId) return pool
+        const updated = { ...pool, ...updates, last_updated: new Date().toISOString() }
+        console.log(`📝 Updated pool capacity: ${poolId}`)
+        return updated
+      })
+    )
+  }
+
+  const deleteAllocationPoolCapacity = (poolId: string) => {
+    const pool = allocationPoolCapacity.find(p => p.pool_id === poolId)
+    setAllocationPoolCapacity(prev => prev.filter(p => p.pool_id !== poolId))
+    console.log(`🗑️ Deleted pool capacity:`, pool?.pool_id)
+  }
+
+  // PoolBooking CRUD
+  const addPoolBooking = (bookingData: Omit<PoolBooking, 'id' | 'created_at' | 'updated_at'>) => {
+    const newBooking: PoolBooking = {
+      ...bookingData,
+      id: `booking-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    }
+    setPoolBookings(prev => [...prev, newBooking])
+    console.log(`✅ Created pool booking: ${newBooking.booking_reference}`)
+    return newBooking
+  }
+
+  const updatePoolBooking = (id: string, updates: Partial<PoolBooking>) => {
+    setPoolBookings(prevBookings =>
+      prevBookings.map(booking => {
+        if (booking.id !== id) return booking
+        const updated = { ...booking, ...updates, updated_at: new Date().toISOString() }
+        console.log(`📝 Updated pool booking: ${booking.booking_reference}`)
+        return updated
+      })
+    )
+  }
+
+  const deletePoolBooking = (id: string) => {
+    const booking = poolBookings.find(b => b.id === id)
+    setPoolBookings(prev => prev.filter(b => b.id !== id))
+    console.log(`🗑️ Deleted pool booking:`, booking?.booking_reference)
+  }
+
+  // RateCapacitySettings CRUD
+  const addRateCapacitySettings = (settingsData: Omit<RateCapacitySettings, 'id'>) => {
+    const newSettings: RateCapacitySettings = {
+      ...settingsData
+    }
+    setRateCapacitySettings(prev => [...prev, newSettings])
+    console.log(`✅ Created rate capacity settings for rate: ${newSettings.rate_id}`)
+    return newSettings
+  }
+
+  const updateRateCapacitySettings = (rateId: number, updates: Partial<RateCapacitySettings>) => {
+    setRateCapacitySettings(prevSettings =>
+      prevSettings.map(settings => {
+        if (settings.rate_id !== rateId) return settings
+        const updated = { ...settings, ...updates }
+        console.log(`📝 Updated rate capacity settings for rate: ${rateId}`)
+        return updated
+      })
+    )
+  }
+
+  const deleteRateCapacitySettings = (rateId: number) => {
+    setRateCapacitySettings(prev => prev.filter(s => s.rate_id !== rateId))
+    console.log(`🗑️ Deleted rate capacity settings for rate: ${rateId}`)
   }
 
   // Tour CRUD
@@ -2941,6 +3399,39 @@ export function DataProvider({ children }: { children: ReactNode }) {
     convertBuyToOrderBooking,
     convertBuyToOrderRoom,
     getConversionHistory,
+    // NEW: Unified inventory system
+    inventoryItems,
+    addInventoryItem,
+    updateInventoryItem,
+    deleteInventoryItem,
+    unifiedContracts,
+    addUnifiedContract,
+    updateUnifiedContract,
+    deleteUnifiedContract,
+    unifiedRates,
+    addUnifiedRate,
+    updateUnifiedRate,
+    deleteUnifiedRate,
+    // NEW: Standalone allocations
+    allocations,
+    setAllocations,
+    addAllocation,
+    updateAllocation,
+    deleteAllocation,
+    // NEW: Pool-centric capacity management
+    allocationPoolCapacity,
+    setAllocationPoolCapacity,
+    addAllocationPoolCapacity,
+    updateAllocationPoolCapacity,
+    deleteAllocationPoolCapacity,
+    poolBookings,
+    addPoolBooking,
+    updatePoolBooking,
+    deletePoolBooking,
+    rateCapacitySettings,
+    addRateCapacitySettings,
+    updateRateCapacitySettings,
+    deleteRateCapacitySettings,
   }
 
   return <DataContext.Provider value={value}>{children}</DataContext.Provider>

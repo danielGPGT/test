@@ -14,7 +14,8 @@ import {
   Truck,
   CreditCard,
   Package,
-  ClipboardList
+  ClipboardList,
+  Sparkles
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -34,6 +35,7 @@ const iconMap = {
   'shopping-bag': ShoppingBag,
   'bar-chart': BarChart,
   users: Users,
+  sparkles: Sparkles,
 }
 
 interface NavItem {
@@ -47,6 +49,8 @@ const navItems: NavItem[] = [
   { title: "Tours", icon: "calendar", route: "/tours" },
   { title: "Hotels", icon: "building", route: "/hotels" },
   { title: "Inventory Management", icon: "warehouse", route: "/inventory" },
+  { title: "🆕 Unified Inventory", icon: "sparkles", route: "/unified-inventory" },
+    { title: "📦 Allocation Pools", icon: "package", route: "/allocation-management" },
   { title: "Service Types", icon: "package", route: "/service-providers" },
   { title: "Operations", icon: "clipboard-list", route: "/operations" },
   { title: "Suppliers", icon: "truck", route: "/suppliers" },

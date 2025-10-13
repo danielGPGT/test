@@ -5,6 +5,8 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Checkbox } from '@/components/ui/checkbox'
+import { TestUnifiedInventory } from '@/components/test-unified-inventory'
+import { DayOfWeekSelector } from '@/components/ui/day-of-week-selector'
 import {
   Dialog,
   DialogContent,
@@ -122,13 +124,13 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
     cancellation_policy: '',
     notes: '',
     days_of_week: {
-      mon: true,
-      tue: true,
-      wed: true,
-      thu: true,
-      fri: true,
-      sat: true,
-      sun: true
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: true,
+      sunday: true
     },
     min_nights: 1,
     max_nights: 30,
@@ -147,6 +149,15 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
     inactive_reason: '',
     valid_from: '',
     valid_to: '',
+    days_of_week: {
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: true,
+      sunday: true
+    },
     min_nights: undefined as number | undefined,
     max_nights: undefined as number | undefined,
     board_included: true,
@@ -401,6 +412,15 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
         inactive_reason: rate.inactive_reason || '',
         valid_from: rate.valid_from || '',
         valid_to: rate.valid_to || '',
+        days_of_week: rate.days_of_week || {
+          mon: true,
+          tue: true,
+          wed: true,
+          thu: true,
+          fri: true,
+          sat: true,
+          sun: true
+        },
         min_nights: rate.min_nights,
         max_nights: rate.max_nights,
         board_included: rate.board_included !== undefined ? rate.board_included : true,
@@ -425,6 +445,15 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
         inactive_reason: '',
         valid_from: contract?.start_date || '',
         valid_to: contract?.end_date || '',
+        days_of_week: {
+          monday: true,
+          tuesday: true,
+          wednesday: true,
+          thursday: true,
+          friday: true,
+          saturday: true,
+          sunday: true
+        },
         min_nights: contract?.min_nights,
         max_nights: contract?.max_nights,
         board_included: true,
@@ -478,6 +507,7 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
       inactive_reason: rateForm.active ? undefined : rateForm.inactive_reason,
       valid_from: rateForm.valid_from || undefined,
       valid_to: rateForm.valid_to || undefined,
+      days_of_week: rateForm.days_of_week,
       min_nights: rateForm.min_nights,
       max_nights: rateForm.max_nights,
       markup_percentage: rateForm.markup_percentage,
@@ -549,6 +579,15 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
       inactive_reason: '',
       valid_from: '', // Clear for user to enter new dates
       valid_to: '', // Clear for user to enter new dates
+      days_of_week: rate.days_of_week || {
+        mon: true,
+        tue: true,
+        wed: true,
+        thu: true,
+        fri: true,
+        sat: true,
+        sun: true
+      },
       min_nights: rate.min_nights,
       max_nights: rate.max_nights,
       board_included: rate.board_included !== undefined ? rate.board_included : true,
@@ -1947,6 +1986,37 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
                   )
                 })()}
               </div>
+
+              {/* Days of Week Selector */}
+              <div className="grid gap-2">
+                <Label className="text-sm">Valid Days of Week</Label>
+                <DayOfWeekSelector
+                  value={{
+                    monday: rateForm.days_of_week.monday,
+                    tuesday: rateForm.days_of_week.tuesday,
+                    wednesday: rateForm.days_of_week.wednesday,
+                    thursday: rateForm.days_of_week.thursday,
+                    friday: rateForm.days_of_week.friday,
+                    saturday: rateForm.days_of_week.saturday,
+                    sunday: rateForm.days_of_week.sunday
+                  }}
+                  onChange={(selection) => setRateForm({ 
+                    ...rateForm, 
+                    days_of_week: {
+                      monday: selection.monday,
+                      tuesday: selection.tuesday,
+                      wednesday: selection.wednesday,
+                      thursday: selection.thursday,
+                      friday: selection.friday,
+                      saturday: selection.saturday,
+                      sunday: selection.sunday
+                    }
+                  })}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Select which days this rate is valid (leave all checked for any day)
+                </p>
+              </div>
             </div>
             <p className="text-xs text-muted-foreground -mt-2">
               {(() => {
@@ -2268,6 +2338,11 @@ export function InventorySetup({ hideHeader = false }: InventorySetupProps = {})
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      
+      {/* 🧪 UNIFIED INVENTORY SYSTEM TEST COMPONENT */}
+      <div className="mt-8 pt-8 border-t">
+        <TestUnifiedInventory />
+      </div>
     </div>
   )
 }
